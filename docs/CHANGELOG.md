@@ -1,0 +1,188 @@
+# Changelog
+
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) (essentials only).
+
+## [Unreleased]
+
+## [v1.4.4] - 2026-10-16
+
+- Updater replace helper with retry (~12 s): a transient lock (AV) no longer
+  kills the one-shot detached `Move-Item` silently (CI `build-windows` flake
+  in `--test-update-replace`); opt-in `OPENCODE_REPLACE_LOG` captures the
+  helper error, printed by the test on failure (unset in production, no new
+  files next to the exe).
+
+## [v1.4.3] - 2026-10-16
+
+- `gh` probes Stop-safe: `gh auth status` / `gh attestation verify` no longer
+  terminate under `$ErrorActionPreference='Stop'` when `gh` is unauthenticated
+  (CI `build-fat` failed on the probe itself); unauthenticated now warns and
+  the hash pin governs, crypto failures still fail closed.
+
+## [v1.4.2] - 2026-10-16
+
+- `.cmd` launcher: `CALL` .cmd/.bat children so control (and cleanup) always
+  returns; binary resolution moved before tmp creation so early exits leave
+  nothing behind. Known limit (pure batch): raw `& | ^` in CLI args may
+  mangle and empty-string args truncate forwarding — use the `.ps1` launcher
+  for exotic arguments.
+- Build order: `publish-fat.ps1` verifies provenance *before* recording the
+  pin, so a failed check can no longer leave the pin file modified.
+- `.cmd` sweeper scoped by ownership marker (`.portable-cmd`): never touches
+  other launchers' live tmp dirs; >7-day live cmd sessions documented as
+  unsupported.
+
+- Attestation gate fix: `gh` present but unauthenticated no longer fails the
+  build/install (warn + hash pin governs, as if `gh` were absent); crypto
+  failures still fail closed, with one retry against transient infra errors.
+- `setup.sh`: missing SHA-256 tool with a recorded pin now fails closed
+  (`exit 1`) instead of TLS-only warn — matches the fail-closed comment and
+  the `setup.ps1` mirror.
+- Docs honesty: Quickstart no longer claims "nothing ever next to the exe"
+  (exceptions: opt-in `auth/`, staged `.new.exe`); `HOW-IT-WORKS` heading
+  `zero-trace` renamed to best-effort cleanup.
+- Launchers: retry delete of per-run tmp (~10 s, mirrors exe `RobustDelete`);
+  `.cmd` pause via `ping` loopback so piped/CI stdin no longer breaks cleanup.
+
+## [v1.4.1] - 2026-10-15
+
+- Fix: `TryParseVer` hung forever on 2-component versions (loop length never
+  re-evaluated) — normalize deterministically + regression vectors.
+- Updater reliability: a stale `OpencodePortable.new.exe` (previous replace
+  did not complete) is reported at startup and retried on normal exit;
+  `--test-update-replace` covers detection + a real detached-helper swap.
+- Provenance: verify the upstream Sigstore release attestation
+  (`gh attestation verify` with the in-toto release predicate — upstream does
+  NOT use gh's SLSA default) in `setup.*`/`publish-fat` when the `gh` CLI
+  exists: fail-closed on crypto failure, graceful warn when no attestation is
+  published or `gh` is missing. The hash pin remains the always-enforced control.
+- Wording: "zero traces" softened to cleanup-with-scope in hero, checklist and
+  scope notes (EN+IT); behavior unchanged.
+- Docs: new `docs/FIELD-TESTS.md` field-test matrix for VM runs.
+- Sweeper init race: per-run roots younger than 30 s without a verifiable
+  lock are never swept (concurrent sibling mid-initialization) + `--test-sweep-grace`.
+- `setup.sh`: SHA-256 via `sha256sum` with `shasum -a 256` fallback (macOS),
+  loud warning when no tool exists instead of silently skipping verification.
+- `publish-fat.ps1`: fail when a recorded pin changes without explicit
+  `-AllowPinRotation` (upstream re-cut or tampering).
+- Version rule unified (`setup.*`, `publish-fat`): empty = pinned (fail-closed
+  without a valid pin); `latest` = truly resolve upstream; numeric = exactly that.
+- Updater: pure `VerifyFileHash` gate with negative tests (wrong/malformed/
+  missing hash, missing file).
+Upstream opencode stays at `1.19.0` (see `UPSTREAM_VERSION`) unless noted.
+Only `v1.4.1` is published (tags `v1.3.1`–`v1.3.3` were removed, `v1.3.4`–`v1.3.5`
+stay as prior releases); older entries below are kept as change history. The
+`[v1.3.4]` section also consolidates the untagged `v1.3.3` work.
+
+## [v1.4.0] - 2026-10-15
+
+- Upstream bump: opencode `1.18.35` → `1.19.0` (last GitHub zip with
+  login-free free tier; v2 free models require Zen login server-side
+  (`FreeTierError` without it), so v2 stays opt-in only).
+- v2 plumbing (kept, opt-in): `setup.*`/`publish-fat` also handle
+  `2.x` via npm tgz (`cli-<target>-<version>.tgz`, re-zipped as payload
+  so the runtime stays zip-only); explicit `-Version 2.0.29` for trials.
+- Self-updater: explicit `--check-update` / `--update [--yes]` checks the
+  portable's own GitHub releases, verifies `.sha256` fail-closed, stages
+  `OpencodePortable.new.exe` + detached replace (running exe is locked),
+  temp in unique host-TEMP dir swept next run / via `--clean-host`.
+  Normal runs stay offline: no network unless you ask.
+- Persistent login (backup, already built): free models currently work with no
+  login (verified Oct 2026), but upstream gated them server-side before
+  (`FreeTierError`, Sep 2026) and may do it again — then one-time Zen login:
+  scripts persist it in `data/`, the exe offers opt-in `--persist-auth`
+  (`<exe>/auth/auth.json` seed + atomic copy-back, `--forget-auth` to wipe,
+  never touched by `--clean-host`); `OPENCODE_API_KEY` per session needs no files.
+- Portable version `1.3.6` → `1.4.0`.
+
+## [v1.3.6]
+
+- Guard reporting: host-guard delete failures are reported (never silent) with
+  a `--clean-host` pointer; `--clean-host` also sweeps empty guard-path
+  fossils (non-empty dirs are reported, never deleted blindly).
+
+- Privacy: central `ScrubIdentity` (profile/TEMP/app-data paths both slash
+  forms, username, domain, hostname) applied to crash logs, console errors
+  and watchdog telemetry; telemetry logs swept with dead-owner rule.
+- Validation: `--picker-exe` gated behind test flags, `--watch`/`--watch-hop`
+  reject unverifiable identities, `.lock` via `CreateNew` fail-closed,
+  binary re-verified just before spawn, crash-sweep reparse-safe.
+- Supply chain: committed `UPSTREAM_VERSION.sha256` pin (`setup.*` fail
+  closed), explicit versions validated, retry/timeout everywhere, tokens never
+  in argv, secret-scan extended (more prefixes, `src/` included, redacted
+  output), CI least-privilege + token blanked on binary-exec steps.
+- Build privacy: `PathMap` + deterministic build strip builder paths from PDBs.
+- Docs: honest hero/checklist (TEMP checks, best-effort wording, WER payload
+  gap, forensic scope, ACL guidance), upstream copyright + fork chain noted.
+
+## [v1.3.5]
+
+- Upstream bump: opencode `1.18.31` → `1.18.35` (payload re-embedded, SHA-256
+  hash and SBOM regenerated, full test matrix re-run green).
+
+## [v1.3.4]
+
+- Test hooks: `--test-race` (junction swap mid-delete, victim target always
+  survives) and `--test-longpath` (deep nested paths via `RobustDelete`).
+- Cleanup hardening: reparse-safe `ClearReadOnly` (manual walk, never follows
+  links), strict `sh` sweeper (exact stamp + dead PID only).
+- Atomic setup: `setup.sh` installs via `.new` + `mv`; `publish-fat.ps1` sends
+  `GITHUB_TOKEN` auth header on all GitHub API calls.
+- Validation/privacy: `--workspace=` rejects empty/flag values, volatile
+  `s_dataRoot` for close-handler race, crash-log scrub expanded to
+  `HOMEDRIVE`/`HOMEPATH`/`USERNAME`/`COMPUTERNAME`, CSPRNG for watchdog and
+  telemetry suffixes.
+- Hygiene: `.gitignore` covers `*.p12`/`*.pfx`/`id_rsa*`/`secrets.json`/
+  `*.tmp`/`*.bak`/`*~`; docs sync (README EN+IT, HOW-IT-WORKS).
+- Version coherence: `csproj <Version>` now `1.3.4`, in sync with tag and
+  CHANGELOG; Unix exec bits (`755`) stored for `opencode-portable.sh`,
+  `scripts/setup.sh`, `scripts/pack-release.sh`.
+
+## [v1.3.2]
+
+- CycloneDX SBOM (`OpencodePortable.exe.cdx.json`) generated by `publish-fat.ps1`
+  with the real embedded payload hash; `dist` `.sha256` for the final exe.
+- Diagnostic `--test-*` flags gated behind `OPENCODE_ENABLE_TESTFLAGS=1`
+  (release surface: launchers, picker, watchdog, clean, self-test only).
+- Validation hardening: `--workspace` rejects empty/flag values, atomic
+  config create + JSON check, CSPRNG root suffix + ownership `.lock` file,
+  canonical paths, exclusive pre-spawn binary check, reparse warnings.
+- Cleanup hardening: reparse-safe `ClearReadOnly`, null-guarded COM release,
+  crash-TEMP unique per incident with startup sweep, host-guard creation-time
+  check, `RobustDelete` everywhere including early-error paths.
+- Scripts: `sh` sweeper strict + no-`exec` trap fix, `cmd` arg rebuild without
+  `%*` leakage, `ps1` Linux-safe paths, `setup` atomic + pinned default,
+  `pack` validation + secret-scan unification, `install-shortcuts` guards.
+- CI: actions pinned to SHA, SDK pinned via `global.json`, full-payload `fat`
+  job on tags, `THIRD-PARTY-NOTICES.md`.
+
+## [v1.3]
+
+- Security test hooks: `--test-junction` (link removed, target intact),
+  `--test-midrun-delete` (graceful exit when the root vanishes mid-run).
+- Watchdog hardening: strict per-run name validation, verified parent identity,
+  kill-by-image before delete, orphan double-hop, self-deleting renamed copy.
+- Strict sweeper everywhere: exact-stamp names + dead PIDs only — live sessions
+  and user directories are never touched.
+- Payload SHA-256 embedded at build and re-verified before every extraction;
+  atomic setup installs; absolute system shell for self-delete.
+- CI: full-payload `fat` job on tags; `UPSTREAM_VERSION` pin file.
+
+## [v1.2]
+
+- Hero READMEs (EN+IT) with collapsible sections, language toggle buttons,
+  zero-trace verification checklist.
+- CI Windows build workflow (build + self-tests + secret scan + hygiene checks).
+- Forensic-scope disclaimer: application traces removed, OS/security telemetry
+  out of scope.
+- `publish-fat.ps1`: arch-matched RID, payload integrity gate, `--has-payload`
+  assert, staging cleanup.
+
+## [v1.1] — first public release
+
+- Single-file Windows app (`OpencodePortable.exe`, embedded opencode, offline).
+- Per-run workspace root, always deleted (quit, X/Alt+F4, Ctrl+C, Task Manager).
+- Supervised child picker with drag-and-drop fallback; fail-closed PATH;
+  strict sweeper; orphan watchdog; WER silencing.
+- Companion `.cmd`/`.ps1`/`.sh` launchers (Linux/macOS via scripts).
+- Bilingual docs, MIT license.

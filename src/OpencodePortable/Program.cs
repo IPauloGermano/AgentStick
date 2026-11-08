@@ -1,0 +1,1226 @@
+// Opencode Portable V2 — Windows launcher: folder picker, embedded-payload
+// first-run extraction (fully offline, no runtime downloads), portable env
+// (XDG redirect + isolated tmp + host guards), run opencode with
+// CWD = selected workspace, full cleanup on exit.
+// SPDX-License-Identifier: MIT
+using System.Diagnostics;
+using System.IO.Compression;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Text;
+
+namespace OpencodePortable;
+
+internal static class Program
+{
+
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        // Silence Windows Error Reporting for OUR crashes (including the
+        // supervised picker-child AVs): they die with their exit code and never
+        // land in %ProgramData%\...\WER\ReportArchive. Our own crash-*.log
+        // mechanism keeps diagnostics. Tradeoff, deliberate, for best-effort
+        // cleanup (OS telemetry stays out of scope).
+        try { SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS); } catch { }
+        try
+        {
+            int rc = Run(args);
+            if (rc != 0 && args.Length == 0 && !Console.IsInputRedirected)
+            {
+                Console.WriteLine("\n[opencode-portable] Pressione Enter para fechar...");
+                try { Console.ReadLine(); } catch { }
+            }
+            return rc;
+        }
+        catch (Exception ex)
+        {
+            // Fatal guard: on double-click the console closes instantly, so show a
+            // native message box (P/Invoke) AND write a crash log with full stack —
+            // never die silently, always diagnosable in one shot.
+            string stack = ScrubIdentity(ex.ToString());
+            string[] lines = stack.Split('\n');
+            string shortStack = string.Join("\n", lines[..Math.Min(8, lines.Length)]);
+            string msg = ScrubIdentity($"[opencode-portable] ERRORE FATALE: {ex.GetType().Name}: {ex.Message}\n\n{shortStack}");
+            Console.Error.WriteLine(msg);
+            try
+            {
+                // Prefer the workspace-local state dir; host TEMP only if we crash
+                // before any workspace is known. Unique per incident (never a
+                // shared global dir two runs could fight over). Never next to exe.
+                // NOTE: forwarded opencode args are NEVER logged (they may carry
+                // secrets); only the launcher-owned flag count.
+                int ownedCount = args.Count(a => a.StartsWith("--", StringComparison.Ordinal));
+                string logDir = s_crashDir ?? Path.Combine(Path.GetTempPath(),
+                    "opencode-portable-crash-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(logDir);
+                // Privacy: scrub identity-bearing fragments (profile/TEMP paths,
+                // username in all common forms, home drives, domain, hostname).
+                // Both the file and the on-screen message are scrubbed: paths in
+                // shared screenshots must not leak the user profile.
+                stack = ScrubIdentity(stack);
+                File.WriteAllText(
+                    Path.Combine(logDir, $"crash-{DateTime.Now:yyyyMMdd-HHmmss-fff}-{Environment.ProcessId}.log"),
+                    $"[{DateTime.Now:O}] {stack}\nLauncherFlags: {ownedCount}\n");
+                foreach (string old in Directory.GetFiles(logDir, "crash-*.log")
+                    .OrderByDescending(f => f).Skip(5))
+                {
+                    try { File.Delete(old); } catch { }
+                }
+            }
+            catch { }
+            try { MessageBoxW(IntPtr.Zero, msg, "Opencode Portable", 0x10); }
+            catch { }
+            return 1;
+        }
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+    private const uint SEM_FAILCRITICALERRORS = 0x0001;
+    private const uint SEM_NOGPFAULTERRORBOX = 0x0010;
+
+    [DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetErrorMode();
+
+    internal static bool WerSilenced() =>
+        (GetErrorMode() & (SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS))
+        == (SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
+
+    /// <summary>
+    /// Crash-log directory, set once the workspace is known. The exe itself is
+    /// stateless on a normal run: nothing is ever written next to it (opt-in
+    /// `--persist-auth` keeps `auth/`, `--update` stages `.new.exe`).
+    /// </summary>
+    private static string? s_crashDir;
+
+    /// <summary>
+    /// Redacts identity-bearing fragments: profile/TEMP/app-data paths (both
+    /// backslash and forward-slash forms), username, domain and hostname.
+    /// Single choke point used by crash logs, console errors and watchdog
+    /// telemetry so no new output path can leak the user profile by accident.
+    /// </summary>
+    internal static string ScrubIdentity(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        foreach (string var in new[] { "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA", "USERDOMAIN" })
+        {
+            string val = Environment.GetEnvironmentVariable(var) ?? "";
+            if (val.Length == 0) continue;
+            s = s.Replace(val, "~", StringComparison.OrdinalIgnoreCase);
+            string fwd = val.Replace('\\', '/');
+            if (fwd != val) s = s.Replace(fwd, "~", StringComparison.OrdinalIgnoreCase);
+        }
+        string user = Environment.GetEnvironmentVariable("USERNAME") ?? "";
+        if (user.Length > 0) s = s.Replace(user, "~user", StringComparison.OrdinalIgnoreCase);
+        string host = Environment.GetEnvironmentVariable("COMPUTERNAME") ?? "";
+        if (host.Length > 0) s = s.Replace(host, "~host", StringComparison.OrdinalIgnoreCase);
+        return s;
+    }
+
+    private enum PickOutcome { Ok, Cancel, Fallback }
+
+    /// <summary>
+    /// Child mode entry: runs the native dialog in THIS process and reports via
+    /// stdout protocol. A native AV here kills only the child (see parent).
+    /// </summary>
+    private static int RunPickerChild(string title, string initial)
+    {
+        try
+        {
+            string? picked = NativeFolderDialog.PickFolder(title, initial);
+            if (picked is null) { Console.WriteLine("PICK-CANCEL"); return 1; }
+            Console.WriteLine("PICK-OK:" + picked);
+            return 0;
+        }
+        catch (InvalidOperationException ex) // traced COM failure
+        {
+            Console.WriteLine("PICK-ERROR:" + ex.Message.Replace("\n", " | "));
+            return 2;
+        }
+    }
+
+    /// <summary>
+    /// Parent supervision: runs the picker in a CHILD process (self exe, or the
+    /// --picker-exe <path> override for tests). A native AV in the dialog kills
+    /// only the child (exit 0xC0000005) and the parent falls back gracefully —
+    /// an in-process AV would be uncatchable by any try/catch.
+    /// </summary>
+    private static (PickOutcome, string?) RunPickerSupervised(string title, string initial, string? pickerExeOverride)
+    {
+        string childExe = string.IsNullOrEmpty(pickerExeOverride)
+            ? (Environment.ProcessPath ?? "")
+            : pickerExeOverride;
+        if (string.IsNullOrEmpty(childExe))
+        {
+            Console.Error.WriteLine("[opencode-portable] impossibile localizzare l'eseguibile picker.");
+            return (PickOutcome.Fallback, null);
+        }
+        var psi = new ProcessStartInfo
+        {
+            FileName = childExe,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            // Child writes UTF-8 (see RunPickerChild): decode accordingly, or
+            // non-ASCII workspace paths (es. "Caffè") arrive corrupted.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
+        psi.ArgumentList.Add("--pick-folder");
+        psi.ArgumentList.Add(title);
+        psi.ArgumentList.Add(initial);
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc is null) return (PickOutcome.Fallback, null);
+            // Async pipe drains BEFORE wait: a chatty child must never block on
+            // full stdout/stderr buffers while we block on its exit (deadlock).
+            var outTask = proc.StandardOutput.ReadToEndAsync();
+            var errTask = proc.StandardError.ReadToEndAsync();
+            proc.WaitForExit(); // modal user dialog: wait indefinitely
+            string stdout = outTask.GetAwaiter().GetResult();
+            string stderr = errTask.GetAwaiter().GetResult();
+            foreach (string line in stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                Console.Error.WriteLine("[picker] " + line);
+            if (proc.ExitCode == unchecked((int)0xC0000005))
+            {
+                Console.Error.WriteLine("[opencode-portable] il dialog nativo è crashato (AV); passo al fallback.");
+                return (PickOutcome.Fallback, null);
+            }
+            foreach (string line in stdout.Split('\n', StringSplitOptions.TrimEntries))
+            {
+                if (line.StartsWith("PICK-OK:", StringComparison.Ordinal))
+                    return (PickOutcome.Ok, line["PICK-OK:".Length..]);
+                if (line == "PICK-CANCEL") return (PickOutcome.Cancel, null);
+                if (line.StartsWith("PICK-ERROR:", StringComparison.Ordinal))
+                {
+                    Console.Error.WriteLine("[opencode-portable] dialog fallito: " + line);
+                    return (PickOutcome.Fallback, null);
+                }
+            }
+            Console.Error.WriteLine($"[opencode-portable] picker terminato senza risultato (exit={proc.ExitCode}); passo al fallback.");
+            return (PickOutcome.Fallback, null);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[opencode-portable] impossibile avviare il picker ({ex.Message}); passo al fallback.");
+            return (PickOutcome.Fallback, null);
+        }
+    }
+
+    /// <summary>
+    /// Last-resort folder input without any shell API: the user drags a folder
+    /// from Explorer into this console and presses Enter. Three attempts.
+    /// Redirected stdin is decoded as UTF-8 (PowerShell pipes UTF-8); interactive
+    /// console input keeps the default console encoding.
+    /// </summary>
+    private static string? ConsoleFolderFallback()
+    {
+        for (int i = 1; i <= 3; i++)
+        {
+            Console.WriteLine($"[opencode-portable] trascina la cartella di lavoro in questa finestra e premi Invio (tentativo {i}/3):");
+            string? line = Console.IsInputRedirected ? ReadRedirectedLine() : Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            // PowerShell drag-drop pastes `& 'C:\path'` (or `&"C:\path"`): strip
+            // the invocation operator and both quote styles.
+            string path = line.Trim();
+            if (path.StartsWith("&")) path = path[1..].Trim();
+            path = path.Trim('"').Trim('\'').Trim();
+            if (Directory.Exists(path)) return path;
+            Console.Error.WriteLine($"[opencode-portable] cartella inesistente: {path}");
+        }
+        Console.Error.WriteLine("[opencode-portable] ERRORE: nessuna cartella valida fornita.");
+        return null;
+    }
+
+    private static string? ReadRedirectedLine()
+    {
+        using var ms = new MemoryStream();
+        // Do NOT dispose the shared stdin handle: attempts 2-3 need it too.
+        var stdin = Console.OpenStandardInput();
+        int b;
+        while ((b = stdin.ReadByte()) != -1)
+        {
+            if (b == '\n') break;
+            if (b != '\r') ms.WriteByte((byte)b);
+        }
+        if (ms.Length == 0) return null;
+        byte[] raw = ms.ToArray();
+        try
+        {
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(raw);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Console.InputEncoding.GetString(raw);
+        }
+    }
+
+    /// <summary>
+    /// Shell dialogs may return extended-length paths (\\?\...). Normalize once
+    /// to a regular usable path and canonicalize it; every later use takes the
+    /// canonical value (no repeated re-resolution = no swap window).
+    /// Reparse-point workspaces (symlink/junction, incl. OneDrive-style folders)
+    /// are allowed but warned: cleanup never follows links, still prefer plain dirs.
+    /// </summary>
+    private static string NormalizeLongPath(string path)
+    {
+        const string unc = @"\\?\UNC\";
+        const string prefix = @"\\?\";
+        string normal = path;
+        if (path.StartsWith(unc, StringComparison.Ordinal))
+            normal = @"\\" + path[unc.Length..];
+        else if (path.StartsWith(prefix, StringComparison.Ordinal))
+            normal = path[prefix.Length..];
+        try { normal = Path.GetFullPath(normal); } catch { return path; }
+        if (!Directory.Exists(normal)) return path;
+        try
+        {
+            if ((File.GetAttributes(normal) & FileAttributes.ReparsePoint) != 0)
+                Console.Error.WriteLine("[opencode-portable] ATTENZIONE: workspace su reparse point (link/sync): preferisci una cartella normale.");
+        }
+        catch { }
+        return normal;
+    }
+
+    /// <summary>
+    /// Diagnostic self-test flags (--test-*) are gated behind an explicit
+    /// opt-in so a stock release exposes only operational modes. CI and local
+    /// debugging set OPENCODE_ENABLE_TESTFLAGS=1.
+    /// </summary>
+    private static bool TestsEnabled()
+    {
+        if (Environment.GetEnvironmentVariable("OPENCODE_ENABLE_TESTFLAGS") == "1") return true;
+        Console.Error.WriteLine("[opencode-portable] ERRORE: flag diagnostico disabilitato (serve OPENCODE_ENABLE_TESTFLAGS=1).");
+        return false;
+    }
+
+    private static int Run(string[] args)
+    {
+        // Best-effort sweep of old pre-workspace crash dirs (ours only, >7 days):
+        // they are created only when crashing before any workspace is known.
+        try
+        {
+            string tmp = Path.GetTempPath();
+            var cutoff = DateTime.Now.AddDays(-7);
+            foreach (string d in Directory.GetDirectories(tmp, "opencode-portable-crash-*"))
+            {
+                try
+                {
+                    // Reparse-safe: a squatted crash-* name holding a junction
+                    // must be removed itself, never followed into.
+                    if (Directory.GetLastWriteTime(d) < cutoff)
+                        PortableRun.RobustDelete(d, 3000);
+                }
+                catch { }
+            }
+        }
+        catch { }
+        try { Updater.SweepUpdateTemp(); } catch { }
+        // The exe is stateless: NOTHING is ever written next to it. Everything
+        // (config, cache, state, tmp, binary) lives inside the selected workspace
+        // under .opencode-portable, so deleting the workspace removes all traces.
+        // Never TrimEnd a drive root ("C:\" must stay "C:\", not become "C:").
+        string baseDir = AppContext.BaseDirectory;
+        string root = baseDir.Length > 3
+            ? baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            : baseDir;
+
+        // A leftover staged `.new.exe` proves a previous post-exit replace
+        // never landed: report now, retry on normal exit (see below).
+        string? pendingUpdate = Updater.StaleNewExe(root);
+        if (pendingUpdate is not null)
+            Console.Error.WriteLine("[update] ATTENZIONE: aggiornamento precedente non completato (trovato .new.exe); riprovo alla chiusura, altrimenti chiudi tutte le istanze.");
+
+        // Launcher-owned args (stripped, never forwarded to opencode).
+        bool allowPath = Environment.GetEnvironmentVariable("OPENCODE_ALLOW_PATH_FALLBACK") == "1";
+        bool forceConsole = false;
+        bool persistAuth = Environment.GetEnvironmentVariable("OPENCODE_PORTABLE_PERSIST_AUTH") == "1";
+        string? pickerExe = null;
+        string? workspace = null;
+        var fwd = new List<string>();
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--from-path") { allowPath = true; continue; }
+            if (args[i] == "--console") { forceConsole = true; continue; }
+            if (args[i] == "--persist-auth") { persistAuth = true; continue; }
+            if (args[i] == "--picker-exe") { if (!TestsEnabled()) return 1; if (i + 1 >= args.Length) { Console.Error.WriteLine("[opencode-portable] ERRORE: --picker-exe richiede un percorso."); return 1; } pickerExe = args[++i]; if (string.IsNullOrWhiteSpace(pickerExe)) { Console.Error.WriteLine("[opencode-portable] ERRORE: --picker-exe richiede un percorso non vuoto."); return 1; } continue; }
+            if (args[i].StartsWith("--picker-exe=", StringComparison.Ordinal)) { if (!TestsEnabled()) return 1; pickerExe = args[i]["--picker-exe=".Length..]; if (string.IsNullOrWhiteSpace(pickerExe)) { Console.Error.WriteLine("[opencode-portable] ERRORE: --picker-exe= richiede un percorso non vuoto."); return 1; } continue; }
+            if (args[i] == "--workspace") { if (i + 1 >= args.Length) { Console.Error.WriteLine("[opencode-portable] ERRORE: --workspace richiede una cartella."); return 1; } workspace = args[++i]; if (workspace.StartsWith("--", StringComparison.Ordinal)) { Console.Error.WriteLine("[opencode-portable] ERRORE: --workspace richiede una cartella, non un flag."); return 1; } continue; }
+            if (args[i].StartsWith("--workspace=", StringComparison.Ordinal)) { workspace = args[i]["--workspace=".Length..]; if (string.IsNullOrWhiteSpace(workspace) || workspace.StartsWith("--", StringComparison.Ordinal)) { Console.Error.WriteLine("[opencode-portable] ERRORE: --workspace= richiede una cartella valida."); return 1; } continue; }
+            if (args[i] == "--self-test")
+            {
+                if (NativeFolderDialog.SelfTest(out string detail))
+                {
+                    Console.WriteLine($"[opencode-portable] self-test: {detail}");
+                    if (!WerSilenced())
+                    {
+                        Console.Error.WriteLine("[opencode-portable] self-test FALLITO: WER non silenziato (SetErrorMode).");
+                        return 1;
+                    }
+                    Console.WriteLine("[opencode-portable] self-test: WER silenziato OK");
+                    return 0;
+                }
+                Console.Error.WriteLine($"[opencode-portable] self-test FALLITO: {detail}");
+                return 1;
+            }
+            if (args[i] == "--test-fallback")
+            {
+                if (!TestsEnabled()) return 1;
+                // Exercises ConsoleFolderFallback with piped stdin (CI-friendly).
+                string? tp = ConsoleFolderFallback();
+                if (tp is null) return 1;
+                Console.WriteLine($"[opencode-portable] fallback OK: {tp}");
+                return 0;
+            }
+            if (args[i] == "--test-close")
+            {
+                if (!TestsEnabled()) return 1;
+                // Exercises the native close-handler path (kill tree + trash +
+                // delete) without touching any real console window.
+                return PortableRun.TestCloseHandler();
+            }
+            if (args[i] == "--watch")
+            {
+                // Watchdog mode: wait for the given pid, then delete the dir.
+                // Never runs opencode, never touches the workspace otherwise.
+                // Negative/zero identities are unverifiable: refuse instead of
+                // letting the watchdog abort-and-delete on ambiguity.
+                if (args.Length > i + 3 && int.TryParse(args[i + 1], out int wpid) && wpid > 0
+                    && long.TryParse(args[i + 2], out long wticks) && wticks != 0)
+                {
+                    string wdir = args[i + 3];
+                    return PortableRun.WatchdogRoot(wpid, wticks, wdir);
+                }
+                Console.Error.WriteLine("[opencode-portable] ERRORE: uso: --watch <pid> <startTicks> <dir>");
+                return 1;
+            }
+            if (args[i] == "--test-robust-delete")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestRobustDelete();
+            }
+            if (args[i] == "--test-watchdog")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestWatchdog();
+            }
+            if (args[i] == "--test-watchdog-proc")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestWatchdogProc();
+            }
+            if (args[i] == "--test-watchdog-hop")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestWatchdogHop();
+            }
+            if (args[i] == "--test-watchdog-copy")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestWatchdogCopy();
+            }
+            if (args[i] == "--watch-hop")
+            {
+                // Hop mode: spawn the detached --watch grandchild from this copy,
+                // then exit immediately (orphaning it). Never watches directly.
+                if (args.Length > i + 3)
+                {
+                    string hp = args[i + 1], ht = args[i + 2], hd = args[i + 3];
+                    if (!int.TryParse(hp, out int hpid) || hpid <= 0
+                        || !long.TryParse(ht, out long hticks) || hticks == 0)
+                    {
+                        Console.Error.WriteLine("[opencode-portable] ERRORE: uso: --watch-hop <pid> <startTicks> <dir>");
+                        return 1;
+                    }
+                    return PortableRun.WatchHop(hp, ht, hd);
+                }
+                Console.Error.WriteLine("[opencode-portable] ERRORE: uso: --watch-hop <pid> <startTicks> <dir>");
+                return 1;
+            }
+            if (args[i] == "--report-console")
+            {
+                if (!TestsEnabled()) return 1;
+                // Reports this process' console window handle to a file.
+                // Detached processes have none (0).
+                if (i + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine("[opencode-portable] ERRORE: --report-console richiede un file di output.");
+                    return 1;
+                }
+                string rf = args[++i];
+                try { File.WriteAllText(rf, PortableRun.ConsoleWindowHandle().ToString()); }
+                catch (Exception ex)
+                {
+                    try { File.WriteAllText(rf, "EX:" + ex.GetType().Name); } catch { }
+                }
+                return 0;
+            }
+            if (args[i] == "--test-detached")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestDetached();
+            }
+            if (args[i] == "--test-junction")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestJunction();
+            }
+            if (args[i] == "--test-midrun-delete")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestMidrunDelete();
+            }
+            if (args[i] == "--test-race")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestRace();
+            }
+            if (args[i] == "--test-longpath")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestLongPath();
+            }
+            if (args[i] == "--has-payload")
+            {
+                // Prints embedded payload info for build verification (used by
+                // publish-fat instead of size heuristics). Exit 0 iff present.
+                const string resName = "OpencodePortable.payload.opencode.zip";
+                using Stream? res = Assembly.GetExecutingAssembly().GetManifestResourceStream(resName);
+                if (res is null)
+                {
+                    Console.Error.WriteLine("[opencode-portable] ERRORE: nessun payload incorporato.");
+                    return 1;
+                }
+                Console.WriteLine($"[opencode-portable] payload OK: {resName} ({res.Length} bytes)");
+                return 0;
+            }
+            if (args[i] == "--check-update")
+            {
+                return Updater.CheckUpdate();
+            }
+            if (args[i] == "--update")
+            {
+                bool yes = false;
+                if (i + 1 < args.Length && (args[i + 1] == "--yes" || args[i + 1] == "-y"))
+                { yes = true; i++; }
+                return Updater.Update(yes);
+            }
+            if (args[i] == "--test-update-parse")
+            {
+                if (!TestsEnabled()) return 1;
+                return Updater.TestUpdateParse();
+            }
+            if (args[i] == "--test-update-verify")
+            {
+                if (!TestsEnabled()) return 1;
+                return Updater.TestUpdateVerify();
+            }
+            if (args[i] == "--test-update-replace")
+            {
+                if (!TestsEnabled()) return 1;
+                return Updater.TestUpdateReplace();
+            }
+            if (args[i] == "--test-sweep-grace")
+            {
+                if (!TestsEnabled()) return 1;
+                return TestSweepGrace();
+            }
+            if (args[i] == "--test-skills-seed")
+            {
+                if (!TestsEnabled()) return 1;
+                return TestSkillsSeed();
+            }
+            if (args[i] == "--test-auth-roundtrip")
+            {
+                if (!TestsEnabled()) return 1;
+                return PortableRun.TestAuthRoundtrip();
+            }
+            if (args[i] == "--forget-auth")
+            {
+                // Explicit logout: removes the opt-in persistent auth dir
+                // next to the exe. Needs no workspace. --clean-host never
+                // touches it (credentials are never deleted silently).
+                return PortableRun.ForgetPersistedAuth(Path.Combine(root, "auth"));
+            }
+            if (args[i] == "--clean")
+            {
+                // Sweep stale roots on demand (e.g. after a Task Manager kill),
+                // without launching anything.
+                if (i + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine("[opencode-portable] ERRORE: --clean richiede una cartella.");
+                    return 1;
+                }
+                string target = args[++i];
+                if (!Directory.Exists(target))
+                {
+                    Console.Error.WriteLine($"[opencode-portable] ERRORE: cartella inesistente: {target}");
+                    return 1;
+                }
+                int n = SweepStalePortableRoots(target);
+                Console.WriteLine($"[opencode-portable] rimosse {n} root stale in {target}");
+                return 0;
+            }
+            if (args[i] == "--clean-host")
+            {
+                // Remove OUR host-side traces (WER archives from supervised child
+                // crashes, watchdog telemetry leftovers, TEMP crash fallback dir).
+                // Only files carrying our name; anything else is never touched.
+                // May need elevation for ReportArchive: skips with a note then.
+                return CleanHostTraces();
+            }
+            if (args[i] == "--pick-folder")
+            {
+                // Child mode: show the native dialog, print the protocol, exit.
+                // Never runs opencode. Stdout protocol: PICK-OK:<path> (0),
+                // PICK-CANCEL (1), PICK-ERROR:<trace> (2).
+                // Only consume following args that are not flags (a title never
+                // starts with "--"; this keeps `-- --pick-folder` forwarding safe).
+                Console.OutputEncoding = System.Text.Encoding.UTF8;
+                string pTitle = "Seleziona cartella";
+                string pInitial = "";
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)) pTitle = args[++i];
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)) pInitial = args[++i];
+                return RunPickerChild(pTitle, pInitial);
+            }
+            if (args[i] == "--")
+            {
+                // End of launcher options: forward everything after verbatim,
+                // even if it looks like a launcher flag.
+                for (int j = i + 1; j < args.Length; j++) fwd.Add(args[j]);
+                break;
+            }
+            fwd.Add(args[i]);
+        }
+
+        // An empty workspace must never fail open to the process CWD
+        // (GetFullPath("") returns CWD, which would scatter the root there).
+        if (workspace is not null && string.IsNullOrWhiteSpace(workspace))
+        {
+            Console.Error.WriteLine("[opencode-portable] ERRORE: --workspace vuota non ammessa.");
+            return 1;
+        }
+
+        if (workspace is null)
+        {
+            // Stateless: always start from Documents, no memory file anywhere.
+            string initial = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+            string? picked = null;
+            if (!forceConsole)
+            {
+            var (outcome, childPath) = RunPickerSupervised(
+                "Seleziona la cartella dove lavorare con Opencode Portable", initial, pickerExe);
+                if (outcome == PickOutcome.Cancel)
+                    return 0; // user cancelled: nothing launched, nothing to clean
+                if (outcome == PickOutcome.Ok && !string.IsNullOrEmpty(childPath))
+                    picked = childPath;
+            }
+            if (picked is null)
+            {
+                // --console, or child crashed / errored / empty: drag-and-drop.
+                picked = ConsoleFolderFallback();
+                if (picked is null) return 1;
+            }
+            workspace = NormalizeLongPath(picked);
+        }
+
+        string workFull;
+        try { workFull = Path.GetFullPath(NormalizeLongPath(workspace)); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[opencode-portable] ERRORE: percorso non valido '{workspace}': {ex.Message}");
+            return 1;
+        }
+        if (!Directory.Exists(workFull))
+        {
+            Console.Error.WriteLine($"[opencode-portable] ERRORE: cartella inesistente: {workFull}");
+            return 1;
+        }
+        if (Path.GetPathRoot(workFull) == workFull)
+        {
+            // A drive root as workspace would scatter the per-run root at top
+            // level and sweep the whole drive: refuse explicitly.
+            Console.Error.WriteLine($"[opencode-portable] ERRORE: la workspace non può essere la radice di un drive: {workFull}");
+            return 1;
+        }
+
+        // Portable root: per-run, INSIDE the workspace. Deleting it on exit
+        // leaves no app files behind (best-effort; OS telemetry out of
+        // scope); concurrent runs get separate roots (no sharing,
+        // no locks, no double-delete hazards). Suffix from a CSPRNG (not
+        // timestamp-seeded Random: unpredictable against pre-squat).
+        string stamp = $"{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}-{System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 999999)}";
+        string data = Path.Combine(workFull, $".opencode-portable-{stamp}");
+        try
+        {
+            foreach (string d in new[] { "config", "data", "cache", "state", "tmp", "bin" })
+                Directory.CreateDirectory(Path.Combine(data, d));
+            // Ownership lock: pid + process start ticks, so the sweeper (and the
+            // watchdog) can tell OUR live root from a recycled PID, without trust.
+            // Fail-closed: a live root WITHOUT a lock would be swept mid-run.
+            long ticks = 0;
+            try { using var me = Process.GetCurrentProcess(); ticks = me.StartTime.Ticks; } catch { }
+            using (var fs = new FileStream(Path.Combine(data, ".lock"), FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var sw = new StreamWriter(fs))
+                sw.Write($"{Environment.ProcessId}:{ticks}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[opencode-portable] ERRORE: root non inizializzabile: {ex.GetType().Name}");
+            CleanupRoot(data);
+            return 1;
+        }
+        s_crashDir = Path.Combine(data, "state");
+        SweepStalePortableRoots(workFull);
+
+        // First run: local config from the template next to the exe (read-only),
+        // or from the embedded default when distributing the exe alone.
+        // Atomic create-new: never truncate/overwrite an existing config, and
+        // validate it parses as JSON before use.
+        string cfg = Path.Combine(data, "config", "opencode.json");
+        if (!File.Exists(cfg))
+        {
+            string cfgUser = Path.Combine(root, "config", "opencode.json");
+            string cfgExample = Path.Combine(root, "config", "opencode.example.json");
+            string content;
+            if (File.Exists(cfgUser))
+                content = File.ReadAllText(cfgUser);
+            else if (File.Exists(cfgExample))
+                content = File.ReadAllText(cfgExample);
+            else
+                content = DefaultConfig;
+            try
+            {
+                using var _ = System.Text.Json.JsonDocument.Parse(content);
+            }
+            catch
+            {
+                Console.Error.WriteLine("[opencode-portable] ERRORE: config non valida (JSON malformato), annullo.");
+                CleanupRoot(data);
+                return 1;
+            }
+            try
+            {
+                using var fs = new FileStream(cfg, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                using var sw = new StreamWriter(fs);
+                sw.Write(content);
+            }
+            catch (IOException)
+            {
+                // Created concurrently: fall through, the other writer wins.
+            }
+        }
+
+        SeedPortableSkills(root, data);
+
+        string? bin = allowPath ? FindBundled(root, data) : EnsureBinary(root, data);
+        if (bin is null && !allowPath)
+        {
+            CleanupRoot(data);
+            try { MessageBoxW(IntPtr.Zero, "[opencode-portable] ERRORE: binario opencode non trovato.", "Opencode Portable", 0x10); } catch { }
+            return 1;
+        }
+        string? resolved = ResolveBinary(root, bin, allowPath);
+        if (resolved is null)
+        {
+            CleanupRoot(data);
+            try { MessageBoxW(IntPtr.Zero, "[opencode-portable] ERRORE: risoluzione binario fallita.", "Opencode Portable", 0x10); } catch { }
+            return 1;
+        }
+
+        // Opt-in persistent login: seed last-good tokens into the fresh root.
+        // Everything else still dies with the root; only auth.json survives
+        // (copied back in Execute's finally + close handler).
+        string? authDir = null;
+        if (persistAuth)
+        {
+            authDir = Path.Combine(root, "auth");
+            PortableRun.SeedPersistedAuth(data, authDir);
+            Console.Error.WriteLine("[opencode-portable] auth persistente attiva: il login sopravvive ai run (--forget-auth per rimuoverla).");
+        }
+
+        int code = PortableRun.Execute(data, cfg, workFull, resolved, fwd, authDir, root);
+        // Second chance for a stale update (idempotent mover, see Updater).
+        if (pendingUpdate is not null)
+        {
+            string? selfExe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(selfExe))
+                Updater.RetryPendingReplace(pendingUpdate, selfExe);
+        }
+        return code;
+    }
+
+    /// <summary>
+    /// Removes a just-created per-run root on early-error paths (missing
+    /// binary etc.): Execute's own cleanup never runs there, so do it here
+    /// with the same reparse-safe routine (never a blind recursive delete).
+    /// </summary>
+    private static void CleanupRoot(string data)
+    {
+        try
+        {
+            var left = PortableRun.RobustDelete(data, 5000);
+            if (left.Count > 0)
+                Console.Error.WriteLine("[opencode-portable] ATTENZIONE: resti non cancellati (verranno spazzati al prossimo avvio).");
+        }
+        catch { /* startup sweeper covers leftovers */ }
+    }
+
+    /// <summary>
+    /// Grace window protecting concurrent initialization: between the first
+    /// mkdir of a per-run root and its `.lock` write, a concurrent sweeper
+    /// sees a lockless root it cannot verify. Roots younger than this are
+    /// never swept. Genuine leftovers are always older (the sweeper runs once
+    /// per launch), so they only wait one extra launch.
+    /// </summary>
+    private static readonly TimeSpan SweepGrace = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// True when the root is too young to judge (fail-safe: unreadable
+    /// timestamps also count as young — never delete what you cannot date).
+    /// </summary>
+    internal static bool IsFreshRoot(string dir)
+    {
+        try { return Directory.GetCreationTime(dir) > DateTime.Now - SweepGrace; }
+        catch { return true; }
+    }
+
+    /// <summary>
+    /// Sweeps crash/kill leftovers. STRICT policy (shared with the watchdog):
+    /// only directories whose name matches our exact per-run stamp AND whose
+    /// PID is dead. Live processes are never touched, and user directories
+    /// that merely share the prefix are never matched.
+    /// </summary>
+    private static int SweepStalePortableRoots(string workspace)
+    {
+        int removed = 0;
+        string[] dirs;
+        try { dirs = Directory.GetDirectories(workspace, ".opencode-portable-*"); }
+        catch { return 0; }
+        foreach (string dir in dirs)
+        {
+            try
+            {
+                string name = Path.GetFileName(dir);
+                if (!PortableRun.IsPortableRootName(name)) continue;
+                // Ownership first: a live .lock with matching pid+startTicks means
+                // OUR process (or a concurrent sibling) still runs it. PID alone
+                // is not enough (recycle); ticks make it airtight. No lock or
+                // dead owner -> stale, safe to remove — unless too young to
+                // judge (concurrent sibling mid-initialization, see SweepGrace).
+                if (IsOwnedAlive(dir)) continue;
+                if (IsFreshRoot(dir)) continue;
+                PortableRun.RobustDelete(dir, 3000);
+                if (!Directory.Exists(dir)) removed++;
+            }
+            catch { }
+        }
+        return removed;
+    }
+
+    /// <summary>
+    /// True only when dir/.lock names a pid whose start time still matches:
+    /// a live owner we must never sweep. Anything else (no lock, dead owner,
+    /// recycled PID, unreadable) counts as NOT owned.
+    /// </summary>
+    private static bool IsOwnedAlive(string dir)
+    {
+        try
+        {
+            string lockFile = Path.Combine(dir, ".lock");
+            if (!File.Exists(lockFile)) return false;
+            string[] parts = File.ReadAllText(lockFile).Trim().Split(':');
+            if (parts.Length != 2) return false;
+            if (!int.TryParse(parts[0], out int pid)) return false;
+            if (!long.TryParse(parts[1], out long ticks) || ticks == 0) return false;
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited && p.StartTime.Ticks == ticks;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Test hook (--test-sweep-grace): fresh lockless root (simulated
+    /// concurrent init) must survive the sweeper, old lockless root must go,
+    /// old live-locked root must survive. Deterministic, no concurrency needed.
+    /// </summary>
+    public static int TestSweepGrace()
+    {
+        string ws = Path.Combine(Path.GetTempPath(),
+            "opencode-testsweep-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(ws);
+            string oldRoot = Path.Combine(ws, ".opencode-portable-20200101-000000-99999999-7");
+            string freshRoot = Path.Combine(ws, $".opencode-portable-{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}-424242");
+            string liveRoot = Path.Combine(ws, ".opencode-portable-20200101-000001-99999998-8");
+            Directory.CreateDirectory(oldRoot);
+            Directory.CreateDirectory(freshRoot);
+            Directory.CreateDirectory(liveRoot);
+            Directory.SetCreationTime(oldRoot, DateTime.Now.AddHours(-1));
+            Directory.SetCreationTime(liveRoot, DateTime.Now.AddHours(-1));
+            long ticks = 0;
+            try { using var me = Process.GetCurrentProcess(); ticks = me.StartTime.Ticks; } catch { }
+            File.WriteAllText(Path.Combine(liveRoot, ".lock"), $"{Environment.ProcessId}:{ticks}");
+            int n = SweepStalePortableRoots(ws);
+            bool oldGone = !Directory.Exists(oldRoot);
+            bool freshKept = Directory.Exists(freshRoot);
+            bool liveKept = Directory.Exists(liveRoot);
+            Console.WriteLine($"[test-sweep-grace] oldGone={oldGone} freshKept={freshKept} liveKept={liveKept} removed={n}");
+            bool ok = oldGone && freshKept && liveKept;
+            Console.WriteLine(ok ? "[test-sweep-grace] OK" : "[test-sweep-grace] FALLITO");
+            return ok ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[test-sweep-grace] ERRORE: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Seeds portable skills from the root (pendrive) into the session config dir:
+    /// looks for &lt;root&gt;/skills (or &lt;root&gt;/.opencode/skills).
+    /// Reparse-safe: never follows symlinks or junctions. Capped per file to prevent abuse.
+    /// </summary>
+    internal static int SeedPortableSkills(string root, string data)
+    {
+        int count = 0;
+        try
+        {
+            string skillsSrc = Path.Combine(root, "skills");
+            if (!Directory.Exists(skillsSrc))
+                skillsSrc = Path.Combine(root, ".opencode", "skills");
+            if (!Directory.Exists(skillsSrc) || PortableRun.IsReparsePoint(skillsSrc)) return 0;
+
+            string targetSkillsDir = Path.Combine(data, "config", "opencode", "skills");
+
+            foreach (string skillDir in Directory.GetDirectories(skillsSrc))
+            {
+                try
+                {
+                    if (PortableRun.IsReparsePoint(skillDir)) continue;
+                    string skillName = Path.GetFileName(skillDir);
+                    string destSub = Path.Combine(targetSkillsDir, skillName);
+                    Directory.CreateDirectory(destSub);
+
+                    foreach (string file in Directory.GetFiles(skillDir, "*", SearchOption.AllDirectories))
+                    {
+                        try
+                        {
+                            if (PortableRun.IsReparsePoint(file)) continue;
+                            var fi = new FileInfo(file);
+                            if (fi.Length > 5L * 1024 * 1024) continue; // cap at 5MB
+                            string rel = Path.GetRelativePath(skillDir, file);
+                            string destFile = Path.Combine(destSub, rel);
+                            Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+                            File.Copy(file, destFile, overwrite: true);
+                        }
+                        catch { }
+                    }
+                    count++;
+                }
+                catch { }
+            }
+            if (count > 0)
+                Console.WriteLine($"[opencode-portable] skills portatili caricate: {count}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("[opencode-portable] ATTENZIONE: caricamento skills fallito: " + ex.GetType().Name);
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Test hook (--test-skills-seed): verifies portable skills seeding into session root,
+    /// skipping reparse points and capping file sizes.
+    /// </summary>
+    public static int TestSkillsSeed()
+    {
+        string baseDir = Path.Combine(Path.GetTempPath(), "opencode-testskills-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string root = Path.Combine(baseDir, "root");
+            string data = Path.Combine(baseDir, "data");
+            string skill1 = Path.Combine(root, "skills", "test-skill");
+            Directory.CreateDirectory(skill1);
+            File.WriteAllText(Path.Combine(skill1, "SKILL.md"), "---\nname: test-skill\ndescription: test\n---\n# Test");
+
+            int count = SeedPortableSkills(root, data);
+            string targetFile = Path.Combine(data, "config", "opencode", "skills", "test-skill", "SKILL.md");
+            bool ok = count == 1 && File.Exists(targetFile) && File.ReadAllText(targetFile).Contains("name: test-skill");
+            Console.WriteLine(ok ? "[test-skills-seed] OK" : "[test-skills-seed] FALLITO");
+            return ok ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[test-skills-seed] ERRORE: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { Directory.Delete(baseDir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Removes our host-side traces: WER ReportArchive/ReportQueue entries from
+    /// supervised child crashes, watchdog telemetry leftovers, TEMP crash dir,
+    /// update download leftovers, and empty host-guard fossils (`opencode` dirs
+    /// leaked by violent kills).
+    /// Only paths carrying our names; reparse-safe (a planted link is removed
+    /// itself, never followed); returns 0 even if some need elevation.
+    /// </summary>
+    private static int CleanHostTraces()
+    {
+        int removed = 0, skipped = 0;
+        var candidates = new List<string>();
+        string werBase = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Microsoft", "Windows", "WER");
+        foreach (string sub in new[] { "ReportArchive", "ReportQueue" })
+        {
+            string dir = Path.Combine(werBase, sub);
+            string[] hits;
+            try { hits = Directory.GetDirectories(dir, "*OpencodePortable*"); }
+            catch { skipped++; continue; }
+            candidates.AddRange(hits);
+        }
+        string tmp = Path.GetTempPath();
+        try
+        {
+            foreach (string f in Directory.GetFiles(tmp, "opencode-portable-watchdog-*.log"))
+                candidates.Add(f);
+        }
+        catch { skipped++; }
+        try
+        {
+            int n = PortableRun.SweepWatchdogCopies();
+            if (n > 0) Console.WriteLine($"[clean-host] rimosse {n} copie guardiano stale.");
+        }
+        catch { skipped++; }
+        try
+        {
+            // Current per-incident dirs plus the legacy fixed name, if any.
+            foreach (string d in Directory.GetDirectories(tmp, "opencode-portable-crash-*"))
+                candidates.Add(d);
+            foreach (string d in Directory.GetDirectories(tmp, "opencode-portable-update-*"))
+                candidates.Add(d);
+            string legacy = Path.Combine(tmp, "opencode-portable");
+            if (Directory.Exists(legacy)) candidates.Add(legacy);
+        }
+        catch { skipped++; }
+        // Host-guard paths: a violent kill (finally never runs) can leak an
+        // `opencode` dir the runtime guard would otherwise have removed. Exact
+        // dirs only, reparse-safe handling below. Safety: a NON-empty guard dir
+        // may belong to another opencode install (e.g. npm global) — only empty
+        // fossils are removed, the rest is reported for manual inspection.
+        foreach (string gp in PortableRun.HostGuardPaths())
+        {
+            try
+            {
+                if (Directory.Exists(gp) && Directory.GetFileSystemEntries(gp).Length > 0)
+                {
+                    skipped++;
+                    Console.Error.WriteLine("[clean-host] saltato (non vuota, ispeziona a mano): " + gp);
+                    continue;
+                }
+            }
+            catch { skipped++; continue; }
+            candidates.Add(gp);
+        }
+        foreach (string p in candidates)
+        {
+            try
+            {
+                // Reparse-safe: links removed themselves, never followed.
+                if (PortableRun.IsReparsePoint(p)) { PortableRun.DeleteTreeNoFollow(p); }
+                else if (Directory.Exists(p)) PortableRun.DeleteTreeNoFollow(p);
+                else if (File.Exists(p)) File.Delete(p);
+                else continue;
+                removed++;
+                Console.WriteLine("[clean-host] rimosso: " + p);
+            }
+            catch (Exception ex)
+            {
+                skipped++;
+                Console.Error.WriteLine("[clean-host] saltato (serve admin?): " + p + " (" + ex.GetType().Name + ")");
+            }
+        }
+        Console.WriteLine($"[clean-host] rimossi={removed} saltati={skipped}");
+        return 0;
+    }
+
+    /// <summary>Default config when no template file ships next to the exe.</summary>
+    private const string DefaultConfig =
+        "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"autoupdate\": false,\n  \"share\": \"disabled\"\n}\n";
+
+    /// <summary>
+    /// Bundled binary lookup with a pre-spawn sanity gate: the file must open
+    /// exclusively (not locked/mapped by someone else right now) and be sanely
+    /// sized. Narrows (not closes) the check-then-spawn TOCTOU window.
+    /// </summary>
+    private static string? FindBundled(string root, string data)
+    {
+        foreach (string cand in new[] { Path.Combine(data, "bin", "opencode.exe"), Path.Combine(root, "bin", "opencode.exe") })
+        {
+            try
+            {
+                var fi = new FileInfo(cand);
+                if (!fi.Exists || fi.Length < 10L * 1024 * 1024) continue;
+                using (var fs = new FileStream(cand, FileMode.Open, FileAccess.Read, FileShare.Read))
+                { if (fs.Length < 10L * 1024 * 1024) continue; }
+                return cand;
+            }
+            catch { continue; }
+        }
+        return null;
+    }
+
+    private static string? EnsureBinary(string root, string data)
+    {
+        string? found = FindBundled(root, data);
+        if (found is not null) return found;
+        // First run: extract the payload embedded at BUILD time (no network, ever).
+        // The expected SHA-256 travels in a second embedded resource: verify it
+        // BEFORE extracting anything (supply-chain pin without freezing versions,
+        // publish-fat resolves latest at build).
+        const string resName = "OpencodePortable.payload.opencode.zip";
+        const string hashName = "OpencodePortable.payload.opencode.zip.sha256";
+        using Stream? res = Assembly.GetExecutingAssembly().GetManifestResourceStream(resName);
+        if (res is null)
+        {
+            Console.Error.WriteLine("[opencode-portable] ERRORE: payload opencode non incorporato in questo exe.");
+            Console.Error.WriteLine("[opencode-portable] Ricompila con scripts\\publish-fat.ps1 (i download a runtime sono disabilitati).");
+            return null;
+        }
+        if (res.Length <= 0 || res.Length > 500L * 1024 * 1024)
+        {
+            Console.Error.WriteLine("[opencode-portable] ERRORE: payload di dimensione sospetta, annullo.");
+            return null;
+        }
+        string expected;
+        using (Stream? hs = Assembly.GetExecutingAssembly().GetManifestResourceStream(hashName))
+        {
+            if (hs is null)
+            {
+                Console.Error.WriteLine("[opencode-portable] ERRORE: hash atteso mancante, annullo (build incompleta).");
+                return null;
+            }
+            using var sr = new StreamReader(hs);
+            expected = (sr.ReadToEnd() ?? "").Trim().ToLowerInvariant();
+        }
+        string actual;
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+        {
+            actual = Convert.ToHexString(sha.ComputeHash(res)).ToLowerInvariant();
+        }
+        if (actual != expected || expected.Length != 64)
+        {
+            Console.Error.WriteLine("[opencode-portable] ERRORE: hash payload non corrispondente, annullo (possibile manomissione).");
+            return null;
+        }
+        try { res.Position = 0; }
+        catch
+        {
+            Console.Error.WriteLine("[opencode-portable] ERRORE: payload non rileggibile, annullo.");
+            return null;
+        }
+        Directory.CreateDirectory(Path.Combine(data, "bin"));
+        try
+        {
+            Console.WriteLine("[opencode-portable] primo avvio: estraggo opencode incorporato...");
+            using var zip = new ZipArchive(res, ZipArchiveMode.Read);
+            var entries = zip.Entries;
+            if (entries.Count > 50 || entries.Sum(e => e.Length) > 1024L * 1024 * 1024)
+            {
+                string err = "[opencode-portable] ERRORE: archivio sospetto (troppe entry o troppo grande), annullo.";
+                Console.Error.WriteLine(err);
+                try { MessageBoxW(IntPtr.Zero, err, "Opencode Portable", 0x10); } catch { }
+                return null;
+            }
+            var entry = entries.FirstOrDefault(e =>
+                e.Name.Equals("opencode.exe", StringComparison.OrdinalIgnoreCase))
+                ?? entries.FirstOrDefault(e =>
+                    e.Name.StartsWith("opencode", StringComparison.OrdinalIgnoreCase) &&
+                    e.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+            {
+                string err = "[opencode-portable] ERRORE: nessun opencode.exe nel payload incorporato.";
+                Console.Error.WriteLine(err);
+                try { MessageBoxW(IntPtr.Zero, err, "Opencode Portable", 0x10); } catch { }
+                return null;
+            }
+            entry.ExtractToFile(Path.Combine(data, "bin", "opencode.exe"), overwrite: true);
+            Console.WriteLine($"[opencode-portable] OK -> {Path.Combine(data, "bin", "opencode.exe")}");
+            return Path.Combine(data, "bin", "opencode.exe");
+        }
+        catch (Exception ex)
+        {
+            string err = $"[opencode-portable] ERRORE estrazione payload: {ex.Message}";
+            Console.Error.WriteLine(err);
+            try { MessageBoxW(IntPtr.Zero, err, "Opencode Portable", 0x10); } catch { }
+            return null;
+        }
+    }
+
+    private static string? ResolveBinary(string root, string? bin, bool allowPath)
+    {
+        // Re-verify just before use: narrows the check-then-spawn window (a
+        // planted swap after FindBundled fails the size gate here instead of
+        // being spawned). Not a signature check: see trust docs.
+        if (bin is not null && File.Exists(bin))
+        {
+            try { if (new FileInfo(bin).Length >= 10L * 1024 * 1024) return bin; }
+            catch { }
+            Console.Error.WriteLine("[opencode-portable] ERRORE: binario non valido alla ri-verifica, annullo.");
+            return null;
+        }
+        // Fail-closed PATH fallback: explicit opt-in only, resolved path always shown.
+        if (!allowPath)
+        {
+            Console.Error.WriteLine($"[opencode-portable] ERRORE: '{bin}' non trovato.");
+            Console.Error.WriteLine("[opencode-portable] Riusa opencode da PATH con --from-path come primo argomento o OPENCODE_ALLOW_PATH_FALLBACK=1.");
+            return null;
+        }
+        string? found = FindOnPath("opencode.exe");
+        if (found is null)
+        {
+            Console.Error.WriteLine("[opencode-portable] ERRORE: nessun opencode in PATH.");
+            return null;
+        }
+        Console.Error.WriteLine($"[opencode-portable] ATTENZIONE: uso opencode da PATH: {found}");
+        return found;
+    }
+
+    private static string? FindOnPath(string file)
+    {
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (pathEnv is null) return null;
+        foreach (string dir in pathEnv.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            try
+            {
+                string cand = Path.Combine(dir.Trim().Trim('"'), file);
+                if (File.Exists(cand)) return cand;
+            }
+            catch { }
+        }
+        return null;
+    }
+}
