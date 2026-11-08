@@ -77,6 +77,7 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "Projetos")) "Pasta visível 'Projetos' criada em $MockDrive"
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\diagnostico-windows\SKILL.md")) "Skill 'diagnostico-windows' sincronizada em .\skills"
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\diagnostico-impressora\SKILL.md")) "Skill 'diagnostico-impressora' sincronizada em .\skills"
+    Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\diagnostico-rede\SKILL.md")) "Skill 'diagnostico-rede' sincronizada em .\skills"
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\agent-desktop\SKILL.md")) "Skill 'agent-desktop' sincronizada em .\skills"
 
     foreach ($hiddenName in @('bin', 'config', 'data')) {

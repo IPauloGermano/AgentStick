@@ -106,6 +106,7 @@ Se preferir rodar o OpenCode Portable diretamente da pasta clonada no computador
 | Skill / MCP | Finalidade |
 | :--- | :--- |
 | **`diagnostico-windows`** | Audita uso de CPU/RAM, investiga telas azuis (BSOD) nos logs de eventos, verifica integridade de discos (SMART), rotas de rede, conexões ativas e serviços do Windows. |
+| **`diagnostico-rede`** | Diagnóstico em camadas de conectividade, Wi-Fi, perda de pacotes, jitter, DNS, portas TCP, traceroute, SMB/compartilhamento, VPN, proxy, firewall e conflitos de IP/DHCP. |
 | **`diagnostico-impressora`** | Guia interativo para identificar falhas de impressão, destravar filas e spooler, diagnosticar impressoras offline em portas WSD vs TCP/IP, testar porta 9100 e emitir páginas de teste. |
 | **`agent-desktop`** | Servidor MCP nativo que capacita a IA a navegar visualmente pela máquina: tirar screenshots da tela, mover o cursor, clicar em botões e digitar comandos em aplicativos de desktop. |
 

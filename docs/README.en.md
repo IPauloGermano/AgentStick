@@ -106,6 +106,7 @@ To run OpenCode Portable directly from the cloned repository folder:
 | Skill / MCP | Purpose |
 | :--- | :--- |
 | **`diagnostico-windows`** | Audits CPU/RAM utilization, investigates BSOD crashes in Windows Event Logs, checks disk health (SMART), reviews network routing, and inspects active Windows services. |
+| **`diagnostico-rede`** | Layered network troubleshooting for connectivity drops, Wi-Fi signal/reports, packet loss, jitter, DNS resolution, TCP ports, traceroute, SMB shares, VPN/proxy/firewall, and DHCP/IP conflicts. |
 | **`diagnostico-impressora`** | Interactive assistant to diagnose printer failures, clear stuck print queues and reset Spooler, troubleshoot offline printers on WSD vs TCP/IP ports, test port 9100 connectivity, and print test pages. |
 | **`agent-desktop`** | Native Model Context Protocol (MCP) server enabling visual desktop interaction: screen capture, mouse movement, button clicks, and keyboard input. |
 

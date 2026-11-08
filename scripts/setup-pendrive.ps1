@@ -220,6 +220,11 @@ IF /I "%~1"=="--test-fail" (
   GOTO :afterrun
 )
 
+IF EXIST "%ROOT%\bin\opencode.cmd" (
+  CALL "%ROOT%\bin\opencode.cmd" %*
+  SET "EXITCODE=%ERRORLEVEL%"
+  GOTO :afterrun
+)
 SET "BIN=%ROOT%\bin\opencode.exe"
 IF NOT EXIST "%BIN%" (
   ECHO [opencode-portable] ERROR: "%BIN%" not found.
@@ -489,6 +494,11 @@ IF /I "%~1"=="--test-fail" (
   GOTO :afterrun
 )
 
+IF EXIST "%ROOT%\bin\gh.cmd" (
+  CALL "%ROOT%\bin\gh.cmd" copilot %*
+  SET "EXITCODE=%ERRORLEVEL%"
+  GOTO :afterrun
+)
 SET "BIN=%ROOT%\bin\gh.exe"
 IF NOT EXIST "%BIN%" (
   ECHO [copilot-portable] ERROR: "%BIN%" not found.
@@ -624,13 +634,13 @@ IF /I "%~1"=="--test-fail" (
   GOTO :afterrun
 )
 
-IF EXIST "%ROOT%\bin\antigravity.exe" (
-  "%ROOT%\bin\antigravity.exe" %*
+IF EXIST "%ROOT%\bin\antigravity.cmd" (
+  CALL "%ROOT%\bin\antigravity.cmd" %*
   SET "EXITCODE=%ERRORLEVEL%"
   GOTO :afterrun
 )
-IF EXIST "%ROOT%\bin\antigravity.cmd" (
-  CALL "%ROOT%\bin\antigravity.cmd" %*
+IF EXIST "%ROOT%\bin\antigravity.exe" (
+  "%ROOT%\bin\antigravity.exe" %*
   SET "EXITCODE=%ERRORLEVEL%"
   GOTO :afterrun
 )
@@ -664,50 +674,41 @@ EXIT /B %UPD_RC%
     }
 }
 
-function New-MockBinary([string]$OutExePath) {
-    $parent = Split-Path -Parent $OutExePath
+function New-MockShimContent {
+    return @'
+@ECHO OFF
+SETLOCAL EnableDelayedExpansion
+ECHO CWD=!CD!
+ECHO USERPROFILE=!USERPROFILE!
+ECHO HOME=!HOME!
+ECHO APPDATA=!APPDATA!
+ECHO LOCALAPPDATA=!LOCALAPPDATA!
+ECHO XDG_CONFIG_HOME=!XDG_CONFIG_HOME!
+ECHO XDG_DATA_HOME=!XDG_DATA_HOME!
+ECHO XDG_CACHE_HOME=!XDG_CACHE_HOME!
+ECHO XDG_STATE_HOME=!XDG_STATE_HOME!
+ECHO OPENCODE_CONFIG=!OPENCODE_CONFIG!
+ECHO CLAUDE_CONFIG_DIR=!CLAUDE_CONFIG_DIR!
+ECHO GH_CONFIG_DIR=!GH_CONFIG_DIR!
+ECHO GEMINI_HOME=!GEMINI_HOME!
+ECHO ANTIGRAVITY_HOME=!ANTIGRAVITY_HOME!
+ECHO ANTIGRAVITY_APP_DATA_DIR=!ANTIGRAVITY_APP_DATA_DIR!
+ECHO TMP=!TMP!
+ECHO TEMP=!TEMP!
+ECHO TMPDIR=!TMPDIR!
+ECHO ARGS=%*
+ENDLOCAL & EXIT /B 0
+'@
+}
+
+function Write-MockAgentFiles([string]$ExePath, [string]$CmdPath) {
+    $parent = Split-Path -Parent $ExePath
     if (-not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-    if (Test-Path -LiteralPath $csc) {
-        $tmpCs = Join-Path $env:TEMP ("mock-agent-" + [Guid]::NewGuid().ToString('N') + ".cs")
-        $csCode = @'
-using System;
-class Program {
-    static int Main(string[] args) {
-        foreach (string a in args) {
-            if (string.Equals(a, "--fail", StringComparison.OrdinalIgnoreCase)) return 42;
-            if (string.Equals(a, "--version", StringComparison.OrdinalIgnoreCase)) {
-                Console.WriteLine("1.0.0-mock");
-                return 0;
-            }
-        }
-        Console.WriteLine("CWD=" + Environment.CurrentDirectory);
-        string[] vars = new string[] {
-            "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA",
-            "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-            "OPENCODE_CONFIG", "CLAUDE_CONFIG_DIR", "GH_CONFIG_DIR", "GEMINI_HOME",
-            "ANTIGRAVITY_HOME", "TMP", "TEMP", "TMPDIR"
-        };
-        foreach (string v in vars) {
-            Console.WriteLine(v + "=" + (Environment.GetEnvironmentVariable(v) ?? ""));
-        }
-        Console.WriteLine("ARGS=" + string.Join(" ", args));
-        return 0;
-    }
-}
-'@
-        try {
-            [System.IO.File]::WriteAllText($tmpCs, $csCode)
-            & $csc /nologo /target:exe "/out:$OutExePath" $tmpCs | Out-Null
-        }
-        finally {
-            if (Test-Path -LiteralPath $tmpCs) { Remove-Item -LiteralPath $tmpCs -Force -ErrorAction SilentlyContinue }
-        }
-    }
-    if (-not (Test-Path -LiteralPath $OutExePath)) {
-        [System.IO.File]::WriteAllText($OutExePath, "MOCK_BINARY")
+    [System.IO.File]::WriteAllText($ExePath, "MOCK_PORTABLE_BINARY")
+    if ($CmdPath) {
+        [System.IO.File]::WriteAllText($CmdPath, (New-MockShimContent))
     }
 }
 
@@ -902,7 +903,7 @@ if (Test-Path -LiteralPath $sourceSkills) {
         Copy-Item -Path (Join-Path $_.FullName "*") -Destination $dstSkill -Recurse -Force
     }
 } else {
-    foreach ($fallbackSkill in @("diagnostico-windows", "diagnostico-impressora", "agent-desktop")) {
+    foreach ($fallbackSkill in @("diagnostico-windows", "diagnostico-impressora", "diagnostico-rede", "agent-desktop")) {
         $p = Join-Path $dirSkills $fallbackSkill
         if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
     }
@@ -912,13 +913,6 @@ if (Test-Path -LiteralPath $sourceSkills) {
 $updateScriptSrc = Join-Path $RepoRoot "scripts\update.ps1"
 if (Test-Path -LiteralPath $updateScriptSrc) {
     Copy-Item -LiteralPath $updateScriptSrc -Destination (Join-Path $dirBin "update.ps1") -Force
-}
-
-# Se estiver em modo Mock, compila um binário stub executável único para os agentes
-$mockExeTemplate = $null
-if ($Mock) {
-    $mockExeTemplate = Join-Path $env:TEMP ("portable-mock-bin-" + [Guid]::NewGuid().ToString('N') + ".exe")
-    New-MockBinary -OutExePath $mockExeTemplate
 }
 
 try {
@@ -961,8 +955,8 @@ try {
                 $targetAgentDesktop = Join-Path $dirBin "agent-desktop.exe"
 
                 if ($Mock) {
-                    Copy-Item -LiteralPath $mockExeTemplate -Destination $targetOpencode -Force
-                    Copy-Item -LiteralPath $mockExeTemplate -Destination $targetAgentDesktop -Force
+                    Write-MockAgentFiles -ExePath $targetOpencode -CmdPath (Join-Path $dirBin "opencode.cmd")
+                    Write-MockAgentFiles -ExePath $targetAgentDesktop -CmdPath (Join-Path $dirBin "agent-desktop.cmd")
                 } else {
                     $localOpencode = Join-Path $RepoRoot "bin\opencode.exe"
                     if (Test-Path -LiteralPath $localOpencode) {
@@ -1023,9 +1017,7 @@ try {
                 $targetClaudeCmd = Join-Path $nodeDir "claude.cmd"
 
                 if ($Mock) {
-                    Copy-Item -LiteralPath $mockExeTemplate -Destination $targetNodeExe -Force
-                    $claudeShim = '@ECHO OFF' + "`r`n" + '"%~dp0node.exe" %*' + "`r`n"
-                    [System.IO.File]::WriteAllText($targetClaudeCmd, $claudeShim)
+                    Write-MockAgentFiles -ExePath $targetNodeExe -CmdPath $targetClaudeCmd
                 } else {
                     $localNodeDir = Join-Path $RepoRoot "bin\node"
                     if (Test-Path -LiteralPath (Join-Path $localNodeDir "node.exe")) {
@@ -1074,7 +1066,7 @@ try {
 
                 $targetGhExe = Join-Path $dirBin "gh.exe"
                 if ($Mock) {
-                    Copy-Item -LiteralPath $mockExeTemplate -Destination $targetGhExe -Force
+                    Write-MockAgentFiles -ExePath $targetGhExe -CmdPath (Join-Path $dirBin "gh.cmd")
                 } else {
                     $localGh = Join-Path $RepoRoot "bin\gh.exe"
                     if (Test-Path -LiteralPath $localGh) {
@@ -1113,9 +1105,7 @@ try {
                 $targetAgyCmd = Join-Path $dirBin "antigravity.cmd"
 
                 if ($Mock) {
-                    Copy-Item -LiteralPath $mockExeTemplate -Destination $targetAgyExe -Force
-                    $agyShim = '@ECHO OFF' + "`r`n" + '"%~dp0antigravity.exe" %*' + "`r`n"
-                    [System.IO.File]::WriteAllText($targetAgyCmd, $agyShim)
+                    Write-MockAgentFiles -ExePath $targetAgyExe -CmdPath $targetAgyCmd
                 } else {
                     $localAgyExe = Join-Path $RepoRoot "bin\antigravity.exe"
                     $localAgyCmd = Join-Path $RepoRoot "bin\antigravity.cmd"
@@ -1157,9 +1147,6 @@ EXIT /B 1
     }
 }
 finally {
-    if ($mockExeTemplate -and (Test-Path -LiteralPath $mockExeTemplate)) {
-        Remove-Item -LiteralPath $mockExeTemplate -Force -ErrorAction SilentlyContinue
-    }
 }
 
 # ============================================================
