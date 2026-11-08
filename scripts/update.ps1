@@ -31,12 +31,15 @@ $TargetClaudeCmd    = Join-Path $TargetNodeDir 'claude.cmd'
 $TargetGhExe        = Join-Path $BinDir 'gh.exe'
 $TargetAgyExe       = Join-Path $BinDir 'antigravity.exe'
 $TargetAgyCmd       = Join-Path $BinDir 'antigravity.cmd'
+$TargetRgExe        = Join-Path $BinDir 'rg.exe'
+$TargetJqExe        = Join-Path $BinDir 'jq.exe'
 
 $UpdateOpencode     = $All -or (Test-Path -LiteralPath $TargetOpencode)
 $UpdateAgentDesktop = $All -or (Test-Path -LiteralPath $TargetAgentDesktop)
 $UpdateClaude       = $All -or (Test-Path -LiteralPath $TargetNodeExe) -or (Test-Path -LiteralPath $TargetClaudeCmd)
 $UpdateCopilot      = $All -or (Test-Path -LiteralPath $TargetGhExe)
 $UpdateAntigravity  = $All -or (Test-Path -LiteralPath $TargetAgyExe) -or (Test-Path -LiteralPath $TargetAgyCmd)
+$UpdateToolkit      = $All -or (Test-Path -LiteralPath $TargetRgExe) -or (Test-Path -LiteralPath $TargetJqExe)
 
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "       ATUALIZADOR INTELIGENTE MULTI-AGENT PORTABLE         " -ForegroundColor White
@@ -311,8 +314,29 @@ if ($UpdateAntigravity) {
   Write-Host ""
 }
 
-if (-not ($UpdateOpencode -or $UpdateAgentDesktop -or $UpdateClaude -or $UpdateCopilot -or $UpdateAntigravity)) {
+if (-not ($UpdateOpencode -or $UpdateAgentDesktop -or $UpdateClaude -or $UpdateCopilot -or $UpdateAntigravity -or $UpdateToolkit)) {
   Write-Host "Nenhum binário encontrado em .\bin\. Use --all para forçar o download de todos os agentes." -ForegroundColor Yellow
+}
+
+# ------------------------------------------------------------
+# 6. Kit de Ferramentas Portáteis Extras (rg, fd, jq, sqlite3, Sysinternals)
+# ------------------------------------------------------------
+if ($UpdateToolkit) {
+  Write-Host "[Toolkit] Verificando Kit de Ferramentas Portáteis em .\bin\..." -ForegroundColor Cyan
+  if ($Mock) {
+    Write-Host "  -> [MOCK] Kit de ferramentas portáteis (rg, fd, jq, sqlite3, Sysinternals) verificado em $BinDir" -ForegroundColor Green
+  } else {
+    try {
+      & curl.exe -fSL -o $TargetJqExe "https://github.com/jqlang/jq/releases/latest/download/jq-windows-amd64.exe"
+      foreach ($sysExe in @('handle64.exe', 'pslist64.exe', 'autorunsc64.exe')) {
+        & curl.exe -fSL -o (Join-Path $BinDir $sysExe) "https://live.sysinternals.com/$sysExe"
+      }
+      Write-Host "  -> Sucesso! Utilitários do Kit de Ferramentas Portáteis atualizados." -ForegroundColor Green
+    } catch {
+      Write-Host "[toolkit] ERRO: $($_.Exception.Message)" -ForegroundColor Red
+    }
+  }
+  Write-Host ""
 }
 
 Write-Host "Verificação de atualizações concluída." -ForegroundColor Green

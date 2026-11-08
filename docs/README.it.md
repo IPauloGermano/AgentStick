@@ -108,6 +108,7 @@ Per eseguire OpenCode Portable direttamente dalla cartella clonata sul PC:
 | **`diagnostico-windows`** | Analizza l'uso di CPU/RAM, indaga sui crash BSOD nei log eventi di Windows, verifica lo stato dei dischi (SMART), controlla le rotte di rete e verifica i servizi attivi. |
 | **`diagnostico-rede`** | Diagnostica di rete a livelli per connettività, Wi-Fi, perdita di pacchetti, jitter, DNS, porte TCP, traceroute, condivisioni SMB, VPN/proxy/firewall e conflitti IP/DHCP. |
 | **`diagnostico-impressora`** | Assistente interattivo per diagnosticare problemi di stampa, sbloccare code e riavviare lo Spooler, risolvere stampanti offline su porte WSD vs TCP/IP, testare la porta 9100 e stampare pagine di prova. |
+| **`ferramentas-portateis`** | Kit CLI portatile preinstallato in `.\bin\` (`rg.exe`, `fd.exe`, `jq.exe`, `sqlite3.exe`) + utilità ufficiali **Microsoft Sysinternals** (`handle`, `pslist`, `autorunsc` con `-accepteula`). |
 | **`agent-desktop`** | Server MCP nativo che permette all'IA di interagire visivamente con il desktop: catturare screenshot, muovere il mouse, fare clic su pulsanti e inviare input da tastiera. |
 
 ---

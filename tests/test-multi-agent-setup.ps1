@@ -78,7 +78,14 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\diagnostico-windows\SKILL.md")) "Skill 'diagnostico-windows' sincronizada em .\skills"
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\diagnostico-impressora\SKILL.md")) "Skill 'diagnostico-impressora' sincronizada em .\skills"
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\diagnostico-rede\SKILL.md")) "Skill 'diagnostico-rede' sincronizada em .\skills"
+    Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\ferramentas-portateis\SKILL.md")) "Skill 'ferramentas-portateis' sincronizada em .\skills"
     Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "skills\agent-desktop\SKILL.md")) "Skill 'agent-desktop' sincronizada em .\skills"
+
+    foreach ($toolBin in @('rg.exe', 'fd.exe', 'jq.exe', 'sqlite3.exe', 'handle64.exe', 'pslist64.exe', 'autorunsc64.exe', 'handle.cmd', 'pslist.cmd', 'autorunsc.cmd')) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $MockDrive "bin\$toolBin")) "Ferramenta portátil '$toolBin' instalada em .\bin\"
+    }
+    $handleShimText = Get-Content -LiteralPath (Join-Path $MockDrive "bin\handle.cmd") -Raw
+    Assert-True ($handleShimText -match "-accepteula") "Shim Sysinternals 'handle.cmd' inclui '-accepteula -nobanner'"
 
     foreach ($hiddenName in @('bin', 'config', 'data')) {
         $hiddenPath = Join-Path $MockDrive $hiddenName

@@ -750,6 +750,119 @@ function Write-MockAgentFiles([string]$ExePath, [string]$CmdPath) {
     }
 }
 
+function Install-ExtraToolkit([string]$BinDir, [string]$RepoRootDir, [bool]$IsMock) {
+    Write-Host "  -> Configurando Kit de Ferramentas Portáteis Extras em .\bin\ (rg, fd, jq, sqlite3, Sysinternals)..." -ForegroundColor Cyan
+
+    $sysinternalsTools = @(
+        @{ Exe = 'handle64.exe';   Shim = 'handle.cmd';   Url = 'https://live.sysinternals.com/handle64.exe' },
+        @{ Exe = 'pslist64.exe';   Shim = 'pslist.cmd';   Url = 'https://live.sysinternals.com/pslist64.exe' },
+        @{ Exe = 'autorunsc64.exe'; Shim = 'autorunsc.cmd'; Url = 'https://live.sysinternals.com/autorunsc64.exe' }
+    )
+
+    if ($IsMock) {
+        foreach ($cliTool in @('rg', 'fd', 'jq', 'sqlite3')) {
+            Write-MockAgentFiles -ExePath (Join-Path $BinDir "$cliTool.exe") -CmdPath (Join-Path $BinDir "$cliTool.cmd")
+        }
+        foreach ($sys in $sysinternalsTools) {
+            [System.IO.File]::WriteAllText((Join-Path $BinDir $sys.Exe), "MOCK_SYSINTERNALS_BINARY")
+            $shimContent = "@ECHO OFF`r`n`"%~dp0$($sys.Exe)`" -accepteula -nobanner %*`r`n"
+            [System.IO.File]::WriteAllText((Join-Path $BinDir $sys.Shim), $shimContent)
+        }
+        Write-Host "     [OK] Kit de ferramentas portáteis (Mock) configurado em .\bin\." -ForegroundColor Green
+        return
+    }
+
+    # 1. ripgrep (rg.exe)
+    $targetRg = Join-Path $BinDir "rg.exe"
+    $localRg  = Join-Path $RepoRootDir "bin\rg.exe"
+    if (Test-Path -LiteralPath $localRg) {
+        Copy-Item -LiteralPath $localRg -Destination $targetRg -Force
+    } elseif (-not (Test-Path -LiteralPath $targetRg)) {
+        Write-Host "     Baixando ripgrep (rg.exe)..." -ForegroundColor Gray
+        $tmpZip = Join-Path $env:TEMP ("rg-dl-" + [Guid]::NewGuid().ToString('N') + ".zip")
+        $tmpDir = Join-Path $env:TEMP ("rg-dl-" + [Guid]::NewGuid().ToString('N'))
+        try {
+            $rgVer = "14.1.1"
+            $rgUrl = "https://github.com/BurntSushi/ripgrep/releases/download/$rgVer/ripgrep-$rgVer-x86_64-pc-windows-msvc.zip"
+            & curl.exe -fSL -o $tmpZip $rgUrl
+            Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpDir -Force
+            $foundRg = Get-ChildItem -LiteralPath $tmpDir -Filter "rg.exe" -Recurse | Select-Object -First 1
+            if ($foundRg) { Copy-Item -LiteralPath $foundRg.FullName -Destination $targetRg -Force }
+        } finally {
+            if (Test-Path $tmpZip) { Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue }
+            if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # 2. fd (fd.exe)
+    $targetFd = Join-Path $BinDir "fd.exe"
+    $localFd  = Join-Path $RepoRootDir "bin\fd.exe"
+    if (Test-Path -LiteralPath $localFd) {
+        Copy-Item -LiteralPath $localFd -Destination $targetFd -Force
+    } elseif (-not (Test-Path -LiteralPath $targetFd)) {
+        Write-Host "     Baixando fd-find (fd.exe)..." -ForegroundColor Gray
+        $tmpZip = Join-Path $env:TEMP ("fd-dl-" + [Guid]::NewGuid().ToString('N') + ".zip")
+        $tmpDir = Join-Path $env:TEMP ("fd-dl-" + [Guid]::NewGuid().ToString('N'))
+        try {
+            $fdVer = "v10.2.0"
+            $fdUrl = "https://github.com/sharkdp/fd/releases/download/$fdVer/fd-$fdVer-x86_64-pc-windows-msvc.zip"
+            & curl.exe -fSL -o $tmpZip $fdUrl
+            Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpDir -Force
+            $foundFd = Get-ChildItem -LiteralPath $tmpDir -Filter "fd.exe" -Recurse | Select-Object -First 1
+            if ($foundFd) { Copy-Item -LiteralPath $foundFd.FullName -Destination $targetFd -Force }
+        } finally {
+            if (Test-Path $tmpZip) { Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue }
+            if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # 3. jq (jq.exe)
+    $targetJq = Join-Path $BinDir "jq.exe"
+    $localJq  = Join-Path $RepoRootDir "bin\jq.exe"
+    if (Test-Path -LiteralPath $localJq) {
+        Copy-Item -LiteralPath $localJq -Destination $targetJq -Force
+    } elseif (-not (Test-Path -LiteralPath $targetJq)) {
+        Write-Host "     Baixando jq (jq.exe)..." -ForegroundColor Gray
+        & curl.exe -fSL -o $targetJq "https://github.com/jqlang/jq/releases/latest/download/jq-windows-amd64.exe"
+    }
+
+    # 4. sqlite3 (sqlite3.exe)
+    $targetSqlite = Join-Path $BinDir "sqlite3.exe"
+    $localSqlite  = Join-Path $RepoRootDir "bin\sqlite3.exe"
+    if (Test-Path -LiteralPath $localSqlite) {
+        Copy-Item -LiteralPath $localSqlite -Destination $targetSqlite -Force
+    } elseif (-not (Test-Path -LiteralPath $targetSqlite)) {
+        Write-Host "     Baixando SQLite CLI (sqlite3.exe)..." -ForegroundColor Gray
+        $tmpZip = Join-Path $env:TEMP ("sqlite-dl-" + [Guid]::NewGuid().ToString('N') + ".zip")
+        $tmpDir = Join-Path $env:TEMP ("sqlite-dl-" + [Guid]::NewGuid().ToString('N'))
+        try {
+            & curl.exe -fSL -o $tmpZip "https://www.sqlite.org/2025/sqlite-tools-win-x64-3490100.zip"
+            Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpDir -Force
+            $foundSqlite = Get-ChildItem -LiteralPath $tmpDir -Filter "sqlite3.exe" -Recurse | Select-Object -First 1
+            if ($foundSqlite) { Copy-Item -LiteralPath $foundSqlite.FullName -Destination $targetSqlite -Force }
+        } finally {
+            if (Test-Path $tmpZip) { Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue }
+            if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # 5. Microsoft Sysinternals Suite selecionada (handle64.exe, pslist64.exe, autorunsc64.exe) + shims -accepteula
+    foreach ($sys in $sysinternalsTools) {
+        $dstExe = Join-Path $BinDir $sys.Exe
+        $srcExe = Join-Path $RepoRootDir ("bin\" + $sys.Exe)
+        if (Test-Path -LiteralPath $srcExe) {
+            Copy-Item -LiteralPath $srcExe -Destination $dstExe -Force
+        } elseif (-not (Test-Path -LiteralPath $dstExe)) {
+            Write-Host "     Baixando Sysinternals $($sys.Exe) (Microsoft)..." -ForegroundColor Gray
+            & curl.exe -fSL -o $dstExe $sys.Url
+        }
+        $shimContent = "@ECHO OFF`r`n`"%~dp0$($sys.Exe)`" -accepteula -nobanner %*`r`n"
+        [System.IO.File]::WriteAllText((Join-Path $BinDir $sys.Shim), $shimContent)
+    }
+
+    Write-Host "     [OK] Kit de ferramentas portáteis configurado em .\bin\." -ForegroundColor Green
+}
+
 # ============================================================
 # 1. Determinação da Unidade / Diretório de Destino
 # ============================================================
@@ -941,11 +1054,14 @@ if (Test-Path -LiteralPath $sourceSkills) {
         Copy-Item -Path (Join-Path $_.FullName "*") -Destination $dstSkill -Recurse -Force
     }
 } else {
-    foreach ($fallbackSkill in @("diagnostico-windows", "diagnostico-impressora", "diagnostico-rede", "agent-desktop")) {
+    foreach ($fallbackSkill in @("diagnostico-windows", "diagnostico-impressora", "diagnostico-rede", "ferramentas-portateis", "agent-desktop")) {
         $p = Join-Path $dirSkills $fallbackSkill
         if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
     }
 }
+
+# Instala Kit de Ferramentas Portáteis Extras em .\bin\
+Install-ExtraToolkit -BinDir $dirBin -RepoRootDir $RepoRoot -IsMock ([bool]$Mock)
 
 # Copia script de atualização inteligente para .\bin\update.ps1
 $updateScriptSrc = Join-Path $RepoRoot "scripts\update.ps1"
