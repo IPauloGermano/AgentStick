@@ -18,11 +18,11 @@ REM  portable (.\data). Niente in %USERPROFILE%\.config o
 REM  %USERPROFILE%\.local\share.
 REM ============================================================
 
-REM Cartella che contiene questo script (senza backslash finale, ma mai
-REM ridotta a lettera drive nuda: "C:\" deve restare "C:\", non "C:")
+REM Cartella che contiene questo script (senza backslash finale: "D:\" diventa
+REM "D:", così "%ROOT%\data" diventa sempre "D:\data" senza doppia barra "D:\\data"
+REM che fa fallire LoadLibrary di Bun/OpenTUI con error code 126).
 SET "ROOT=%~dp0"
-IF "%ROOT%"=="%~d0\" SET "ROOT=%~d0\"
-IF NOT "%ROOT%"=="%~d0\" IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
+IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 
 IF /I "%~1"=="--update" GOTO :doupdate
 IF /I "%~1"=="--atualizar" GOTO :doupdate
@@ -185,7 +185,7 @@ IF DEFINED APPDATA IF "%SYS_ROAM_EXISTS%"=="0" IF EXIST "%SYS_ROAM_OPENC%\NUL" (
 IF DEFINED USERPROFILE IF "%SYS_HOME_EXISTS%"=="0" IF EXIST "%SYS_HOME_OPENC%\NUL" (RMDIR /S /Q "%SYS_HOME_OPENC%" 2>NUL) ELSE IF EXIST "%SYS_HOME_OPENC%" DEL /F /Q "%SYS_HOME_OPENC%" 2>NUL
 IF NOT "%EXITCODE%"=="0" IF "%~1"=="" (
   ECHO.
-  ECHO [opencode-portable] Process exited with code !EXITCODE!.
+  ECHO [opencode-portable] Process exited with code %EXITCODE%.
   ECHO Press any key to close this window...
   PAUSE >NUL
 )

@@ -141,7 +141,6 @@ IF /I NOT "%~1"=="--no-banner" (
 )
 
 SET "ROOT=%~dp0"
-IF NOT "%ROOT%"=="%~d0\" IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 
 IF /I "%~1"=="--update" GOTO :doupdate
@@ -275,7 +274,6 @@ IF /I NOT "%~1"=="--no-banner" (
 )
 
 SET "ROOT=%~dp0"
-IF NOT "%ROOT%"=="%~d0\" IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 
 IF /I "%~1"=="--update" GOTO :doupdate
@@ -415,7 +413,6 @@ IF /I NOT "%~1"=="--no-banner" (
 )
 
 SET "ROOT=%~dp0"
-IF NOT "%ROOT%"=="%~d0\" IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 
 IF /I "%~1"=="--update" GOTO :doupdate
@@ -553,7 +550,6 @@ IF /I NOT "%~1"=="--no-banner" (
 )
 
 SET "ROOT=%~dp0"
-IF NOT "%ROOT%"=="%~d0\" IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 
 IF /I "%~1"=="--update" GOTO :doupdate
