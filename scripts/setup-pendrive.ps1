@@ -146,6 +146,7 @@ IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 IF /I "%~1"=="--update" GOTO :doupdate
 IF /I "%~1"=="--atualizar" GOTO :doupdate
 
+SET "HOST_TMP=%TEMP%"
 SET "DATA=%ROOT%\data\opencode"
 IF NOT EXIST "%DATA%\config" MKDIR "%DATA%\config" 2>NUL
 IF NOT EXIST "%DATA%\data"   MKDIR "%DATA%\data" 2>NUL
@@ -155,6 +156,11 @@ IF NOT EXIST "%DATA%\home"   MKDIR "%DATA%\home" 2>NUL
 IF NOT EXIST "%DATA%\appdata\Roaming" MKDIR "%DATA%\appdata\Roaming" 2>NUL
 IF NOT EXIST "%DATA%\appdata\Local"   MKDIR "%DATA%\appdata\Local" 2>NUL
 SET "TMPROOT=%DATA%\tmp"
+REM Em pendrives (FAT32/exFAT, fora do %SystemDrive%), o Smart App Control do Windows 11
+REM bloqueia LoadLibrary de DLLs nativas extraidas pelo Bun (opentui-*.dll, erro 126)
+REM porque FAT32/exFAT nao suporta NTFS Extended Attributes ($EA). Usa staging NTFS
+REM efemero para a DLL de runtime, mantendo 100% dos dados/configs em .\data\opencode.
+IF /I NOT "%~d0"=="%SystemDrive%" IF DEFINED HOST_TMP SET "TMPROOT=%HOST_TMP%\opencode-portable-tmp"
 IF NOT EXIST "%TMPROOT%" MKDIR "%TMPROOT%" 2>NUL
 
 IF NOT EXIST "%ROOT%\config\opencode.json" IF EXIST "%ROOT%\config\opencode.example.json" COPY /Y "%ROOT%\config\opencode.example.json" "%ROOT%\config\opencode.json" >NUL 2>&1
@@ -235,7 +241,7 @@ IF NOT EXIST "%BIN%" (
 SET "EXITCODE=%ERRORLEVEL%"
 
 :afterrun
-IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" RMDIR /S /Q "%RUN_TMP%" 2>NUL
+IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" CALL :delretry "%RUN_TMP%"
 SETLOCAL EnableDelayedExpansion
 IF NOT "!EXITCODE!"=="0" (
   ECHO.
@@ -244,6 +250,15 @@ IF NOT "!EXITCODE!"=="0" (
   IF NOT DEFINED PORTABLE_NONINTERACTIVE PAUSE >NUL
 )
 ENDLOCAL & EXIT /B %EXITCODE%
+
+:delretry
+FOR /L %%R IN (1,1,10) DO (
+  IF NOT EXIST "%~1" GOTO :EOF
+  RMDIR /S /Q "%~1" 2>NUL
+  IF NOT EXIST "%~1" GOTO :EOF
+  ping -n 2 127.0.0.1 >NUL 2>&1
+)
+GOTO :EOF
 
 :doupdate
 SHIFT /1
@@ -374,7 +389,7 @@ ECHO [claude-portable] ERROR: Claude Code runtime not found in "%ROOT%\bin\node"
 SET "EXITCODE=1"
 
 :afterrun
-IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" RMDIR /S /Q "%RUN_TMP%" 2>NUL
+IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" CALL :delretry "%RUN_TMP%"
 SETLOCAL EnableDelayedExpansion
 IF NOT "!EXITCODE!"=="0" (
   ECHO.
@@ -383,6 +398,15 @@ IF NOT "!EXITCODE!"=="0" (
   IF NOT DEFINED PORTABLE_NONINTERACTIVE PAUSE >NUL
 )
 ENDLOCAL & EXIT /B %EXITCODE%
+
+:delretry
+FOR /L %%R IN (1,1,10) DO (
+  IF NOT EXIST "%~1" GOTO :EOF
+  RMDIR /S /Q "%~1" 2>NUL
+  IF NOT EXIST "%~1" GOTO :EOF
+  ping -n 2 127.0.0.1 >NUL 2>&1
+)
+GOTO :EOF
 
 :doupdate
 SHIFT /1
@@ -511,7 +535,7 @@ IF /I "%~1"=="copilot" (
 SET "EXITCODE=%ERRORLEVEL%"
 
 :afterrun
-IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" RMDIR /S /Q "%RUN_TMP%" 2>NUL
+IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" CALL :delretry "%RUN_TMP%"
 SETLOCAL EnableDelayedExpansion
 IF NOT "!EXITCODE!"=="0" (
   ECHO.
@@ -520,6 +544,15 @@ IF NOT "!EXITCODE!"=="0" (
   IF NOT DEFINED PORTABLE_NONINTERACTIVE PAUSE >NUL
 )
 ENDLOCAL & EXIT /B %EXITCODE%
+
+:delretry
+FOR /L %%R IN (1,1,10) DO (
+  IF NOT EXIST "%~1" GOTO :EOF
+  RMDIR /S /Q "%~1" 2>NUL
+  IF NOT EXIST "%~1" GOTO :EOF
+  ping -n 2 127.0.0.1 >NUL 2>&1
+)
+GOTO :EOF
 
 :doupdate
 SHIFT /1
@@ -645,7 +678,7 @@ ECHO [antigravity-portable] ERROR: Antigravity CLI binary not found in "%ROOT%\b
 SET "EXITCODE=1"
 
 :afterrun
-IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" RMDIR /S /Q "%RUN_TMP%" 2>NUL
+IF "%CLEAN_RUN_TMP%"=="1" IF EXIST "%RUN_TMP%" CALL :delretry "%RUN_TMP%"
 SETLOCAL EnableDelayedExpansion
 IF NOT "!EXITCODE!"=="0" (
   ECHO.
@@ -654,6 +687,15 @@ IF NOT "!EXITCODE!"=="0" (
   IF NOT DEFINED PORTABLE_NONINTERACTIVE PAUSE >NUL
 )
 ENDLOCAL & EXIT /B %EXITCODE%
+
+:delretry
+FOR /L %%R IN (1,1,10) DO (
+  IF NOT EXIST "%~1" GOTO :EOF
+  RMDIR /S /Q "%~1" 2>NUL
+  IF NOT EXIST "%~1" GOTO :EOF
+  ping -n 2 127.0.0.1 >NUL 2>&1
+)
+GOTO :EOF
 
 :doupdate
 SHIFT /1

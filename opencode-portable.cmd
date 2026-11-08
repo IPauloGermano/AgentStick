@@ -27,12 +27,14 @@ IF "%ROOT:~-1%"=="\" SET "ROOT=%ROOT:~0,-1%"
 IF /I "%~1"=="--update" GOTO :doupdate
 IF /I "%~1"=="--atualizar" GOTO :doupdate
 
+SET "HOST_TMP=%TEMP%"
 SET "DATA=%ROOT%\data"
 IF NOT EXIST "%DATA%\config" MKDIR "%DATA%\config"
 IF NOT EXIST "%DATA%\data"   MKDIR "%DATA%\data"
 IF NOT EXIST "%DATA%\cache"  MKDIR "%DATA%\cache"
 IF NOT EXIST "%DATA%\state"  MKDIR "%DATA%\state"
 SET "TMPROOT=%DATA%\tmp"
+IF /I NOT "%~d0"=="%SystemDrive%" IF DEFINED HOST_TMP SET "TMPROOT=%HOST_TMP%\opencode-portable-tmp"
 IF NOT EXIST "%TMPROOT%" MKDIR "%TMPROOT%"
 
 REM Prima esecuzione: crea config da template se manca (fresh clone)
