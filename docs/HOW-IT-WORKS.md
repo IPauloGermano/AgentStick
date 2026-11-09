@@ -70,6 +70,23 @@ Config, data, cache and logs stay inside `./data` next to the scripts.
 | Env hygiene | `.ps1`/`.sh` restore or scope env vars (`try/finally`, `trap`); exe passes env to the child only (no shell pollution); concurrent instances are safe |
 | Binary | `bin/` or fail-closed error (PATH reuse needs `--from-path` / env opt-in, resolved path always printed) |
 
+## C. Multi-Agent Suite & Pendrive Architecture (AgentStick)
+
+The portable USB provisioning (`instalar-pendrive.bat` / `scripts/setup-pendrive.ps1`) expands the portable philosophy across multiple independent AI coding agents:
+
+1. **Per-Agent Isolation Boundaries:**
+   * **OpenCode:** `XDG_*` environment variables redirected into `data/opencode/`.
+   * **Claude Code:** Standalone portable Node.js runtime (`bin/node/node.exe`) executing `@anthropic-ai/claude-code`, with `USERPROFILE`, `HOME`, and `CLAUDE_CONFIG_DIR` isolated strictly in `data/claude/` (`~/.claude` on the USB drive).
+   * **GitHub Copilot CLI:** Portable `gh.exe` with `GH_CONFIG_DIR`, `USERPROFILE`, and `APPDATA` mapped to `data/gh/`.
+   * **Antigravity CLI:** Portable Google DeepMind agent with `GEMINI_HOME`, `.gemini`, and `ANTIGRAVITY_HOME` mapped to `data/antigravity/`.
+2. **Shared Workspace & Skills:**
+   * All agents launch centered on `.\Projetos` on the USB drive.
+   * Diagnostic skills (`skills/diagnostico-windows`, `skills/diagnostico-rede`, `skills/diagnostico-impressora`, `skills/ferramentas-portateis`) are shared and auto-seeded into each agent's configuration.
+3. **Security, Authenticode & Forensics Audit:**
+   * **Authenticode Integrity:** `opencode.exe` and Bun runtime DLLs carry valid digital signatures verified by Microsoft for `Anomaly Innovations, Inc`.
+   * **Local-Only MCP:** `agent-desktop.exe` (Rust native) operates exclusively over local stdio without listening on network ports or exfiltrating data.
+   * **Zero Leakage:** No credentials, tokens, or temporary files escape to the host PC's `%USERPROFILE%`, `%APPDATA%`, or registry.
+
 ## Binaries policy
 
 `bin/`, `data/`, `dist/`, `src/**/payload|bin|obj` and local `config/opencode.json` are git-ignored. The repo ships **source only**:

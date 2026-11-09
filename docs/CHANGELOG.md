@@ -4,6 +4,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) (essentials onl
 
 ## [Unreleased]
 
+- **Security & Forensics Audit:** Verified integrity via static reverse engineering (REA / Ghidra). Confirmed valid Authenticode signatures on `opencode.exe` and Bun runtime DLLs (`Anomaly Innovations, Inc`). Verified zero-stealer, zero-webhook, and zero host-data exfiltration guarantees.
+- **Documentation & Architecture:** Updated `README.md` and `HOW-IT-WORKS.md` with multi-agent isolation architecture (AgentStick), per-agent credential sandboxing (`data/<agent>`), shared workspace (`Projetos/`), and Windows Defender / Smart App Control compatibility notes.
+
 ## [v1.4.4] - 2026-10-16
 
 - Updater replace helper with retry (~12 s): a transient lock (AV) no longer

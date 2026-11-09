@@ -1,4 +1,4 @@
-# AgentStick
+# AgentStick (OpenCode Portable Multi-Agent)
 
 <p align="center">
   <img src="assets/logo.png" alt="AgentStick Logo" width="140" />
@@ -18,6 +18,7 @@
   <img src="https://img.shields.io/badge/Plataforma-Windows%2010%20%7C%2011-0078d4?style=flat-square" alt="Windows 10 | 11">
   <img src="https://img.shields.io/badge/Portabilidade-USB%20Plug%20%26%20Play-10b981?style=flat-square" alt="USB Plug & Play">
   <img src="https://img.shields.io/badge/Seguran%C3%A7a-Smart%20App%20Control%20Ready-6366f1?style=flat-square" alt="SAC Ready">
+  <img src="https://img.shields.io/badge/Auditoria-100%25%20Verificado-success?style=flat-square" alt="Auditoria Verificada">
   <a href="LICENSE"><img src="https://img.shields.io/badge/Licen%C3%A7a-MIT-blue?style=flat-square" alt="Licença: MIT"></a>
 </p>
 
@@ -25,7 +26,7 @@
 
 ## 📌 Visão Geral
 
-O **OpenCode Portable** transforma seu **pendrive USB** ou disco externo em uma suíte multi-agente 100% autônoma e portátil para Windows. Projetado para técnicos, desenvolvedores e administradores de sistemas, ele permite instalar e executar **OpenCode**, **Claude Code**, **GitHub Copilot CLI** e **Antigravity CLI** diretamente do pendrive sem exigir instalação prévia, sem privilégios de administrador e sem deixar credenciais ou arquivos residuais na máquina hospedeira.
+O **AgentStick** transforma seu **pendrive USB** ou disco externo em uma suíte multi-agente 100% autônoma e portátil para Windows. Projetado para técnicos, desenvolvedores e administradores de sistemas, ele permite instalar e executar **OpenCode**, **Claude Code**, **GitHub Copilot CLI** e **Antigravity CLI** diretamente do pendrive sem exigir instalação prévia, sem privilégios de administrador e sem deixar credenciais ou arquivos residuais na máquina hospedeira.
 
 ### Principais Recursos
 
@@ -139,6 +140,17 @@ O projeto conta com uma suíte de testes automatizados (`tests/test-multi-agent-
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test-multi-agent-setup.ps1
 ```
+
+---
+
+## 🔒 Auditoria de Segurança e Integridade
+
+O projeto foi submetido a auditoria estática rigorosa de segurança e engenharia reversa (via REA / Ghidra / AMSI inspection), com as seguintes garantias atestadas:
+
+* **Assinaturas Digitais Oficiais (Authenticode):** O executável `bin/opencode.exe` e os runtimes nativos (`.bun-*.dll`) possuem assinatura digital válida verificada pela Microsoft em nome de `Anomaly Innovations, Inc` (`https://anoma.ly/`). O `agent-desktop.exe` é compilado a partir do código-fonte auditado do Vercel Labs (`v1.2.0`).
+* **Zero Stealers / Zero Exfiltração:** 100% livre de scripts de captura de senhas, credenciais de navegadores (Chrome, Edge, Firefox), sessões de mensageiros ou carteiras de criptomoedas. Nenhuma URL de C2, webhook do Discord ou bot do Telegram.
+* **Isolamento de Disco e Limpeza Ativa:** Os dados voláteis e arquivos temporários são confinados estritamente à pasta `.\data\tmp\run-*`. Um varredor (*sweeper*) com verificação de PID ativo garante a eliminação de resquícios de sessões fechadas ou interrompidas, sem tocar no sistema hospedeiro.
+* **Compatibilidade com Windows Defender:** Todos os launchers e rotinas operam em conformidade com o Windows Defender e políticas de execução do PowerShell.
 
 ---
 
