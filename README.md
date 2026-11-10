@@ -1,4 +1,4 @@
-# AgentStick (OpenCode Portable Multi-Agent)
+# AgentStick
 
 <p align="center">
   <img src="assets/logo.png" alt="AgentStick Logo" width="140" />
@@ -43,7 +43,7 @@ O **AgentStick** transforma seu **pendrive USB** ou disco externo em uma suíte 
 
 | # | Agente | Runtime / Binário em `.\bin\` | Launcher Gerado | Isolamento de Dados e Credenciais |
 | :-: | :--- | :--- | :--- | :--- |
-| **1** | **OpenCode Portable** | `opencode.exe` + `agent-desktop.exe` (MCP) | `Iniciar OpenCode.bat` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` e `USERPROFILE` redirecionados para `.\data\opencode` |
+| **1** | **OpenCode** | `opencode.exe` + `agent-desktop.exe` (MCP) | `Iniciar OpenCode.bat` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` e `USERPROFILE` redirecionados para `.\data\opencode` |
 | **2** | **Claude Code Portable** | Node.js portátil (`.\bin\node\node.exe`) + `@anthropic-ai/claude-code` | `Iniciar Claude Code.bat` | `USERPROFILE`, `HOME` e `CLAUDE_CONFIG_DIR` isolados em `.\data\claude` (`~/.claude` no pendrive) |
 | **3** | **GitHub Copilot CLI** | `gh.exe` estático + extensão Copilot | `Iniciar Copilot.bat` | `GH_CONFIG_DIR`, `USERPROFILE` e `APPDATA` redirecionados para `.\data\gh` |
 | **4** | **Antigravity CLI** | `antigravity.exe` / `antigravity.cmd` (Google DeepMind) | `Iniciar Antigravity.bat` | `GEMINI_HOME`, `.gemini` e `ANTIGRAVITY_HOME` redirecionados para `.\data\antigravity` |
@@ -60,7 +60,7 @@ O repositório inclui um assistente interativo que detecta unidades USB e permit
 4. No menu de seleção de agentes, escolha uma opção única, múltipla ou a suíte completa:
 
 ```text
-  [1] OpenCode Portable (com MCP agent-desktop)             (~120 MB)
+  [1] OpenCode (com MCP agent-desktop)                      (~120 MB)
   [2] Claude Code Portable (com Node.js portátil integrado) (~150 MB)
   [3] GitHub Copilot CLI (com gh.exe portátil)              (~60 MB)
   [4] Antigravity CLI (Google DeepMind)                     (~80 MB)
@@ -95,7 +95,7 @@ Basta plugar o pendrive na máquina desejada e clicar duas vezes no launcher do 
 ```
 
 ### 2. Uso Local (no Computador)
-Se preferir rodar o OpenCode Portable diretamente da pasta clonada no computador:
+Se preferir rodar diretamente da pasta clonada no computador:
 * **Windows (CMD):** execute `opencode-portable.cmd`
 * **Windows (PowerShell):** execute `.\opencode-portable.ps1`
 * **Linux / macOS:** execute `./opencode-portable.sh`

@@ -25,7 +25,7 @@
 
 ## 📌 Panoramica
 
-**OpenCode Portable** trasforma qualsiasi **chiavetta USB** o disco esterno in una suite multi-agente di IA completamente autonoma e portatile per Windows. Progettato per tecnici, sviluppatori e amministratori di sistema, permette di selezionare e installare **OpenCode**, **Claude Code**, **GitHub Copilot CLI** e **Antigravity CLI** direttamente su USB senza alcuna installazione sul PC ospite, senza privilegi di amministratore e senza lasciare credenziali o tracce sul computer host.
+**AgentStick** trasforma qualsiasi **chiavetta USB** o disco esterno in una suite multi-agente di IA completamente autonoma e portatile per Windows. Progettato per tecnici, sviluppatori e amministratori di sistema, permette di selezionare e installare **OpenCode**, **Claude Code**, **GitHub Copilot CLI** e **Antigravity CLI** diretamente su USB senza alcuna installazione sul PC ospite, senza privilegi di amministratore e senza lasciare credenziali o tracce sul computer host.
 
 ### Caratteristiche Principali
 
@@ -42,7 +42,7 @@
 
 | # | Agente | Runtime / Binario in `.\bin\` | Launcher Generato | Isolamento Dati e Credenziali |
 | :-: | :--- | :--- | :--- | :--- |
-| **1** | **OpenCode Portable** | `opencode.exe` + `agent-desktop.exe` (MCP) | `Iniciar OpenCode.bat` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` e `USERPROFILE` reindirizzati in `.\data\opencode` |
+| **1** | **OpenCode** | `opencode.exe` + `agent-desktop.exe` (MCP) | `Iniciar OpenCode.bat` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` e `USERPROFILE` reindirizzati in `.\data\opencode` |
 | **2** | **Claude Code Portable** | Node.js portatile (`.\bin\node\node.exe`) + `@anthropic-ai/claude-code` | `Iniciar Claude Code.bat` | `USERPROFILE`, `HOME` e `CLAUDE_CONFIG_DIR` isolati in `.\data\claude` |
 | **3** | **GitHub Copilot CLI** | `gh.exe` statico + estensione Copilot | `Iniciar Copilot.bat` | `GH_CONFIG_DIR`, `USERPROFILE` e `APPDATA` reindirizzati in `.\data\gh` |
 | **4** | **Antigravity CLI** | `antigravity.exe` / `antigravity.cmd` (Google DeepMind) | `Iniciar Antigravity.bat` | `GEMINI_HOME`, `.gemini` e `ANTIGRAVITY_HOME` reindirizzati in `.\data\antigravity` |
@@ -59,7 +59,7 @@ Il repository include una procedura guidata per preparare qualsiasi chiavetta US
 4. Nel menu interattivo, seleziona uno o più agenti oppure la suite completa:
 
 ```text
-  [1] OpenCode Portable (com MCP agent-desktop)             (~120 MB)
+  [1] OpenCode (con MCP agent-desktop)                      (~120 MB)
   [2] Claude Code Portable (com Node.js portátil integrado) (~150 MB)
   [3] GitHub Copilot CLI (com gh.exe portátil)              (~60 MB)
   [4] Antigravity CLI (Google DeepMind)                     (~80 MB)
@@ -94,7 +94,7 @@ Collega la chiavetta al PC Windows e avvia il launcher dell'agente desiderato (`
 ```
 
 ### 2. Uso Locale (sul Computer)
-Per eseguire OpenCode Portable direttamente dalla cartella clonata sul PC:
+Per eseguire direttamente dalla cartella clonata sul PC:
 * **Windows (CMD):** esegui `opencode-portable.cmd`
 * **Windows (PowerShell):** esegui `.\opencode-portable.ps1`
 * **Linux / macOS:** esegui `./opencode-portable.sh`

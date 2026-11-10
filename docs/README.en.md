@@ -25,7 +25,7 @@
 
 ## 📌 Overview
 
-**OpenCode Portable** turns any **USB flash drive** or external disk into a 100% self-contained, multi-agent AI field toolkit for Windows. Built for technicians, developers, and system administrators, it lets you interactively install and run **OpenCode**, **Claude Code**, **GitHub Copilot CLI**, and **Antigravity CLI** straight from a USB drive without prior installation, without administrator privileges, and with zero credential or file leakage on the host PC.
+**AgentStick** turns any **USB flash drive** or external disk into a 100% self-contained, multi-agent AI field toolkit for Windows. Built for technicians, developers, and system administrators, it lets you interactively install and run **OpenCode**, **Claude Code**, **GitHub Copilot CLI**, and **Antigravity CLI** straight from a USB drive without prior installation, without administrator privileges, and with zero credential or file leakage on the host PC.
 
 ### Key Features
 
@@ -42,7 +42,7 @@
 
 | # | Agent | Runtime / Binary in `.\bin\` | Generated Launcher | Data & Credential Isolation |
 | :-: | :--- | :--- | :--- | :--- |
-| **1** | **OpenCode Portable** | `opencode.exe` + `agent-desktop.exe` (MCP) | `Iniciar OpenCode.bat` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, and `USERPROFILE` redirected to `.\data\opencode` |
+| **1** | **OpenCode** | `opencode.exe` + `agent-desktop.exe` (MCP) | `Iniciar OpenCode.bat` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, and `USERPROFILE` redirected to `.\data\opencode` |
 | **2** | **Claude Code Portable** | Portable Node.js (`.\bin\node\node.exe`) + `@anthropic-ai/claude-code` | `Iniciar Claude Code.bat` | `USERPROFILE`, `HOME`, and `CLAUDE_CONFIG_DIR` isolated inside `.\data\claude` |
 | **3** | **GitHub Copilot CLI** | Static `gh.exe` + Copilot extension | `Iniciar Copilot.bat` | `GH_CONFIG_DIR`, `USERPROFILE`, and `APPDATA` redirected to `.\data\gh` |
 | **4** | **Antigravity CLI** | `antigravity.exe` / `antigravity.cmd` (Google DeepMind) | `Iniciar Antigravity.bat` | `GEMINI_HOME`, `.gemini`, and `ANTIGRAVITY_HOME` redirected to `.\data\antigravity` |
@@ -59,7 +59,7 @@ The repository includes an interactive setup wizard to prepare any USB drive:
 4. In the interactive agent menu, pick a single agent, a custom combination, or the complete suite:
 
 ```text
-  [1] OpenCode Portable (com MCP agent-desktop)             (~120 MB)
+  [1] OpenCode (with MCP agent-desktop)                     (~120 MB)
   [2] Claude Code Portable (com Node.js portátil integrado) (~150 MB)
   [3] GitHub Copilot CLI (com gh.exe portátil)              (~60 MB)
   [4] Antigravity CLI (Google DeepMind)                     (~80 MB)
@@ -94,7 +94,7 @@ Plug the USB drive into the target Windows PC and double-click the desired agent
 ```
 
 ### 2. Local Use (on Your Computer)
-To run OpenCode Portable directly from the cloned repository folder:
+To run directly from the cloned repository folder:
 * **Windows (CMD):** execute `opencode-portable.cmd`
 * **Windows (PowerShell):** execute `.\opencode-portable.ps1`
 * **Linux / macOS:** execute `./opencode-portable.sh`
