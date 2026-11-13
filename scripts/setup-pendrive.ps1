@@ -226,6 +226,7 @@ IF /I "%~1"=="--test-fail" (
 )
 
 IF EXIST "%ROOT%\bin\opencode.cmd" (
+  CALL :checkdb
   CALL "%ROOT%\bin\opencode.cmd" %*
   SET "EXITCODE=%ERRORLEVEL%"
   GOTO :afterrun
@@ -237,6 +238,7 @@ IF NOT EXIST "%BIN%" (
   GOTO :afterrun
 )
 
+CALL :checkdb
 "%BIN%" %*
 SET "EXITCODE=%ERRORLEVEL%"
 
@@ -246,10 +248,114 @@ SETLOCAL EnableDelayedExpansion
 IF NOT "!EXITCODE!"=="0" (
   ECHO.
   ECHO Process exited with code !EXITCODE!.
+  IF EXIST "%DATA%\data\opencode\log" ECHO Logs: "%DATA%\data\opencode\log"
   ECHO Press any key to close this window...
   IF NOT DEFINED PORTABLE_NONINTERACTIVE PAUSE >NUL
 )
 ENDLOCAL & EXIT /B %EXITCODE%
+
+:checkdb
+SET "OPENCODE_DB=%DATA%\data\opencode\opencode.db"
+IF NOT EXIST "%OPENCODE_DB%" GOTO :EOF
+IF NOT EXIST "%OPENCODE_DB%-wal" IF NOT EXIST "%OPENCODE_DB%-shm" GOTO :EOF
+
+SET "SQLITE_BIN="
+SET "SQLITE_IS_CMD=0"
+IF EXIST "%ROOT%\bin\sqlite3.cmd" (
+  SET "SQLITE_BIN=%ROOT%\bin\sqlite3.cmd"
+  SET "SQLITE_IS_CMD=1"
+) ELSE IF EXIST "%ROOT%\bin\sqlite3.exe" (
+  SET "SQLITE_BIN=%ROOT%\bin\sqlite3.exe"
+)
+IF NOT DEFINED SQLITE_BIN GOTO :EOF
+
+REM Nao interfere se outra instancia do opencode.exe ja estiver rodando
+TASKLIST /FI "IMAGENAME eq opencode.exe" 2>NUL | FIND /I "opencode.exe" >NUL
+IF %ERRORLEVEL% EQU 0 GOTO :EOF
+
+REM 1. Checkpoint WAL sem perda de dados
+CALL :walcheckpoint
+IF %ERRORLEVEL% EQU 0 GOTO :checkdb_cleanup
+
+REM 2. Se -shm estiver obsoleto/corrompido (comum em FAT32/exFAT apos crash), remove apenas o -shm e tenta novamente
+IF NOT EXIST "%OPENCODE_DB%-shm" GOTO :wal_recover
+DEL /F /Q "%OPENCODE_DB%-shm" 2>NUL
+CALL :walcheckpoint
+IF %ERRORLEVEL% EQU 0 GOTO :checkdb_cleanup
+
+:wal_recover
+REM 3. Recuperacao automatica com backup previo caso -wal ou o banco estejam corrompidos
+ECHO [opencode-portable] WARNING: SQLite WAL checkpoint failed. Backing up and recovering database...
+SET "DB_BAK=%OPENCODE_DB%.bak"
+COPY /Y "%OPENCODE_DB%" "%DB_BAK%" >NUL 2>&1
+IF NOT %ERRORLEVEL% EQU 0 (
+  ECHO [opencode-portable] ERROR: Failed to back up "%OPENCODE_DB%". Check free space on drive %~d0.
+  GOTO :checkdb_cleanup
+)
+IF EXIST "%OPENCODE_DB%-wal" COPY /Y "%OPENCODE_DB%-wal" "%DB_BAK%-wal" >NUL 2>&1
+
+IF EXIST "%OPENCODE_DB%-wal" DEL /F /Q "%OPENCODE_DB%-wal" 2>NUL
+IF EXIST "%OPENCODE_DB%-shm" DEL /F /Q "%OPENCODE_DB%-shm" 2>NUL
+
+CALL :checkdbintegrity "%OPENCODE_DB%"
+IF %ERRORLEVEL% EQU 0 (
+  ECHO [opencode-portable] Database recovered by clearing corrupt WAL/SHM ^(backup: "%DB_BAK%"^).
+  GOTO :checkdb_cleanup
+)
+
+REM 4. Se o proprio opencode.db estiver corrompido, tenta reconstruir via .recover
+IF EXIST "%OPENCODE_DB%.recovered" DEL /F /Q "%OPENCODE_DB%.recovered" 2>NUL
+CALL :runsqlite_out "%OPENCODE_DB%" ".recover" "%RUN_TMP%\opencode-recover.sql"
+IF NOT %ERRORLEVEL% EQU 0 GOTO :recover_fail
+IF NOT EXIST "%RUN_TMP%\opencode-recover.sql" GOTO :recover_fail
+CALL :runsqlite_in "%OPENCODE_DB%.recovered" "%RUN_TMP%\opencode-recover.sql"
+IF NOT %ERRORLEVEL% EQU 0 GOTO :recover_fail
+IF NOT EXIST "%OPENCODE_DB%.recovered" GOTO :recover_fail
+CALL :checkdbintegrity "%OPENCODE_DB%.recovered"
+IF NOT %ERRORLEVEL% EQU 0 GOTO :recover_fail
+MOVE /Y "%OPENCODE_DB%.recovered" "%OPENCODE_DB%" >NUL 2>&1
+IF NOT %ERRORLEVEL% EQU 0 GOTO :recover_fail
+ECHO [opencode-portable] Database reconstructed with sqlite3 .recover ^(backup: "%DB_BAK%"^).
+GOTO :checkdb_cleanup
+
+:recover_fail
+IF EXIST "%OPENCODE_DB%.recovered" DEL /F /Q "%OPENCODE_DB%.recovered" 2>NUL
+ECHO [opencode-portable] WARNING: Automatic database recovery did not complete. Backup at "%DB_BAK%".
+
+:checkdb_cleanup
+DEL /F /Q "%RUN_TMP%\walcheck.txt" "%RUN_TMP%\dbcheck.txt" "%RUN_TMP%\opencode-recover.sql" 2>NUL
+GOTO :EOF
+
+:walcheckpoint
+DEL /F /Q "%RUN_TMP%\walcheck.txt" 2>NUL
+CALL :runsqlite_out "%OPENCODE_DB%" "PRAGMA busy_timeout=3000; PRAGMA wal_checkpoint(TRUNCATE);" "%RUN_TMP%\walcheck.txt"
+IF NOT %ERRORLEVEL% EQU 0 EXIT /B 1
+FINDSTR /B "1|" "%RUN_TMP%\walcheck.txt" >NUL 2>&1
+IF %ERRORLEVEL% EQU 0 EXIT /B 1
+EXIT /B 0
+
+:checkdbintegrity
+DEL /F /Q "%RUN_TMP%\dbcheck.txt" 2>NUL
+CALL :runsqlite_out "%~1" "PRAGMA quick_check;" "%RUN_TMP%\dbcheck.txt"
+IF NOT %ERRORLEVEL% EQU 0 EXIT /B 1
+FINDSTR /X /I "ok" "%RUN_TMP%\dbcheck.txt" >NUL 2>&1
+EXIT /B %ERRORLEVEL%
+
+:runsqlite_out
+IF "%SQLITE_IS_CMD%"=="1" GOTO :runsqlite_out_cmd
+"%SQLITE_BIN%" "%~1" "%~2" > "%~3" 2>NUL
+EXIT /B %ERRORLEVEL%
+:runsqlite_out_cmd
+CALL "%SQLITE_BIN%" "%~1" "%~2" > "%~3" 2>NUL
+EXIT /B %ERRORLEVEL%
+
+:runsqlite_in
+IF "%SQLITE_IS_CMD%"=="1" GOTO :runsqlite_in_cmd
+"%SQLITE_BIN%" "%~1" < "%~2" >NUL 2>&1
+EXIT /B %ERRORLEVEL%
+:runsqlite_in_cmd
+CALL "%SQLITE_BIN%" "%~1" < "%~2" >NUL 2>&1
+EXIT /B %ERRORLEVEL%
 
 :delretry
 FOR /L %%R IN (1,1,10) DO (

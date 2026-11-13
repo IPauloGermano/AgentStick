@@ -202,6 +202,78 @@ try {
     $updOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installedUpdater --all --mock 2>&1
     Assert-True ($LASTEXITCODE -eq 0) "Atualizador inteligente (update.ps1 --all --mock) executou com código 0"
 
+    # 2d. Teste de auto-recuperação SQLite WAL em Iniciar OpenCode.bat
+    $ocBat = Join-Path $MockDrive "Iniciar OpenCode.bat"
+    $ocDbDir = Join-Path $MockDrive "data\opencode\data\opencode"
+    New-Item -ItemType Directory -Path $ocDbDir -Force | Out-Null
+    $ocDb = Join-Path $ocDbDir "opencode.db"
+    $ocWal = "$ocDb-wal"
+    $ocShm = "$ocDb-shm"
+    $sqliteCmd = Join-Path $MockDrive "bin\sqlite3.cmd"
+    $sqliteLog = Join-Path $MockDrive "data\opencode\sqlite-calls.log"
+    $origSqliteCmd = Get-Content -LiteralPath $sqliteCmd -Raw
+
+    try {
+        # 2d-1: Checkpoint WAL bem-sucedido
+        [System.IO.File]::WriteAllText($ocDb, "DUMMY_DB")
+        [System.IO.File]::WriteAllText($ocWal, "DUMMY_WAL")
+        [System.IO.File]::WriteAllText($ocShm, "DUMMY_SHM")
+        Remove-Item -LiteralPath $sqliteLog -Force -ErrorAction SilentlyContinue
+        $mockSqliteOk = @'
+@ECHO OFF
+ECHO %~1^|%~2>> "%~dp0..\data\opencode\sqlite-calls.log"
+ECHO 0^|1^|1
+EXIT /B 0
+'@
+        [System.IO.File]::WriteAllText($sqliteCmd, $mockSqliteOk)
+        & cmd.exe /c "`"$ocBat`" --no-banner" | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0) "Iniciar OpenCode.bat executou com código 0 após WAL checkpoint"
+        $calls1 = if (Test-Path -LiteralPath $sqliteLog) { Get-Content -LiteralPath $sqliteLog -Raw } else { "" }
+        Assert-True ($calls1 -match "wal_checkpoint\(TRUNCATE\)") "Iniciar OpenCode.bat executou PRAGMA wal_checkpoint(TRUNCATE) quando -wal/-shm existem"
+
+        # 2d-2: Falha inicial com -shm corrompido, recupera após remoção do -shm
+        Remove-Item -LiteralPath $sqliteLog -Force -ErrorAction SilentlyContinue
+        [System.IO.File]::WriteAllText($ocWal, "DUMMY_WAL")
+        [System.IO.File]::WriteAllText($ocShm, "CORRUPT_SHM")
+        $mockSqliteRetryShm = @'
+@ECHO OFF
+ECHO %~1^|%~2>> "%~dp0..\data\opencode\sqlite-calls.log"
+IF EXIST "%~1-shm" EXIT /B 1
+ECHO 0^|1^|1
+EXIT /B 0
+'@
+        [System.IO.File]::WriteAllText($sqliteCmd, $mockSqliteRetryShm)
+        & cmd.exe /c "`"$ocBat`" --no-banner" | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0) "Iniciar OpenCode.bat recuperou automaticamente após falha inicial com -shm"
+        Assert-True (-not (Test-Path -LiteralPath $ocShm)) "Iniciar OpenCode.bat removeu -shm obsoleto para tentar novo checkpoint"
+
+        # 2d-3: WAL corrompido -> cria backup .bak, limpa WAL/SHM e valida quick_check
+        Remove-Item -LiteralPath $sqliteLog, "$ocDb.bak", "$ocDb.bak-wal" -Force -ErrorAction SilentlyContinue
+        [System.IO.File]::WriteAllText($ocDb, "DUMMY_DB")
+        [System.IO.File]::WriteAllText($ocWal, "CORRUPT_WAL")
+        [System.IO.File]::WriteAllText($ocShm, "CORRUPT_SHM")
+        $mockSqliteRecover = @'
+@ECHO OFF
+ECHO %~1^|%~2>> "%~dp0..\data\opencode\sqlite-calls.log"
+ECHO %~2 | FINDSTR /I "wal_checkpoint" >NUL
+IF %ERRORLEVEL% EQU 0 EXIT /B 1
+ECHO %~2 | FINDSTR /I "quick_check" >NUL
+IF %ERRORLEVEL% EQU 0 (
+  ECHO ok
+  EXIT /B 0
+)
+EXIT /B 0
+'@
+        [System.IO.File]::WriteAllText($sqliteCmd, $mockSqliteRecover)
+        & cmd.exe /c "`"$ocBat`" --no-banner" | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0) "Iniciar OpenCode.bat recuperou banco com WAL corrompido"
+        Assert-True (Test-Path -LiteralPath "$ocDb.bak") "Backup opencode.db.bak foi criado antes da limpeza de WAL"
+        Assert-True (Test-Path -LiteralPath "$ocDb.bak-wal") "Backup opencode.db.bak-wal foi criado antes da remoção do -wal"
+        Assert-True (-not (Test-Path -LiteralPath $ocWal) -and -not (Test-Path -LiteralPath $ocShm)) "Arquivos WAL/SHM corrompidos foram limpos após backup"
+    } finally {
+        [System.IO.File]::WriteAllText($sqliteCmd, $origSqliteCmd)
+    }
+
     Write-Host ""
 
     # ============================================================

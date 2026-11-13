@@ -107,11 +107,69 @@ try {
     Write-Warning "[opencode-portable] using opencode from PATH: $Bin"
   }
 
+  # Pre-flight SQLite WAL recovery when leftover -wal/-shm files exist after a crash
+  $OpenCodeDb = Join-Path (Join-Path (Join-Path $Data 'data') 'opencode') 'opencode.db'
+  $SqliteBin = Join-Path $BinDir 'sqlite3.exe'
+  if ((Test-Path -LiteralPath $OpenCodeDb) -and (Test-Path -LiteralPath $SqliteBin) -and
+      ((Test-Path -LiteralPath "$OpenCodeDb-wal") -or (Test-Path -LiteralPath "$OpenCodeDb-shm")) -and
+      (-not (Get-Process -Name 'opencode' -ErrorAction SilentlyContinue))) {
+    $invokeCheckpoint = {
+      $out = & $SqliteBin $OpenCodeDb 'PRAGMA busy_timeout=3000; PRAGMA wal_checkpoint(TRUNCATE);' 2>$null
+      return ($LASTEXITCODE -eq 0 -and -not ($out | Where-Object { $_ -match '^1\|' }))
+    }
+    $testDbIntegrity = {
+      param([string]$Path)
+      $chk = & $SqliteBin $Path 'PRAGMA quick_check;' 2>$null
+      return ($LASTEXITCODE -eq 0 -and ($chk | Where-Object { $_ -match '^(?i)ok$' }))
+    }
+    if (-not (& $invokeCheckpoint)) {
+      if (Test-Path -LiteralPath "$OpenCodeDb-shm") {
+        Remove-Item -LiteralPath "$OpenCodeDb-shm" -Force -ErrorAction SilentlyContinue
+      }
+      if (-not (& $invokeCheckpoint)) {
+        Write-Warning '[opencode-portable] SQLite WAL checkpoint failed. Backing up and recovering database...'
+        $dbBak = "$OpenCodeDb.bak"
+        try {
+          Copy-Item -LiteralPath $OpenCodeDb -Destination $dbBak -Force
+          if (Test-Path -LiteralPath "$OpenCodeDb-wal") {
+            Copy-Item -LiteralPath "$OpenCodeDb-wal" -Destination "$dbBak-wal" -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath "$OpenCodeDb-wal", "$OpenCodeDb-shm" -Force -ErrorAction SilentlyContinue
+          if (& $testDbIntegrity $OpenCodeDb) {
+            Write-Warning "[opencode-portable] Database recovered by clearing corrupt WAL/SHM (backup: $dbBak)."
+          } else {
+            $recoverSql = Join-Path $RunTmp 'opencode-recover.sql'
+            $recoveredDb = "$OpenCodeDb.recovered"
+            Remove-Item -LiteralPath $recoveredDb -Force -ErrorAction SilentlyContinue
+            $recoverLines = & $SqliteBin $OpenCodeDb '.recover' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $recoverLines) {
+              [System.IO.File]::WriteAllLines($recoverSql, [string[]]$recoverLines, [System.Text.UTF8Encoding]::new($false))
+              Get-Content -LiteralPath $recoverSql -Raw | & $SqliteBin $recoveredDb 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $recoveredDb) -and (& $testDbIntegrity $recoveredDb)) {
+                Move-Item -LiteralPath $recoveredDb -Destination $OpenCodeDb -Force
+                Write-Warning "[opencode-portable] Database reconstructed with sqlite3 .recover (backup: $dbBak)."
+              }
+            }
+            Remove-Item -LiteralPath $recoverSql, $recoveredDb -Force -ErrorAction SilentlyContinue
+          }
+        } catch {
+          Write-Warning "[opencode-portable] Automatic database recovery failed: $($_.Exception.Message)"
+        }
+      }
+    }
+  }
+
   # Support pipeline input
   if ($MyInvocation.ExpectingInput) { $input | & $Bin @fwdArgs }
   else { & $Bin @fwdArgs }
   # $LASTEXITCODE can stay $null for non-native shims: never propagate null.
   $code = if ($null -eq $LASTEXITCODE) { 1 } else { $LASTEXITCODE }
+  if ($code -ne 0) {
+    $logDir = Join-Path (Join-Path (Join-Path $Data 'data') 'opencode') 'log'
+    if (Test-Path -LiteralPath $logDir) {
+      Write-Warning "[opencode-portable] Logs: $logDir"
+    }
+  }
 } catch {
   Write-Error "[opencode-portable] ERROR: $($_.Exception.Message)"
   $code = 1
